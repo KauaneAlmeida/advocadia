@@ -154,18 +154,23 @@ class IntelligentHybridOrchestrator:
         platform: str,
         phone_number: Optional[str] = None
     ) -> Dict[str, Any]:
-        session_data = await get_user_session(session_id) or {
-            "session_id": session_id,
-            "platform": platform,
-            "created_at": ensure_utc(datetime.now(timezone.utc)),
-            "lead_data": {},
-            "message_count": 0,
-            "fallback_step": None,  # Current step ID in fallback mode
-            "phone_submitted": False,
-            "gemini_available": True,
-            "last_gemini_check": None,
-            "fallback_completed": False
-        }
+        session_data = await get_user_session(session_id)
+        
+        if not session_data:
+            # Create new session with proper initialization
+            session_data = {
+                "session_id": session_id,
+                "platform": platform,
+                "created_at": ensure_utc(datetime.now(timezone.utc)),
+                "lead_data": {},
+                "message_count": 0,
+                "fallback_step": None,  # Will be set to 1 when fallback starts
+                "phone_submitted": False,
+                "gemini_available": True,
+                "last_gemini_check": None,
+                "fallback_completed": False
+            }
+            logger.info(f"🆕 Created new session {session_id} for platform {platform}")
 
         if phone_number:
             session_data["phone_number"] = phone_number
@@ -325,12 +330,14 @@ class IntelligentHybridOrchestrator:
             if session_data.get("fallback_step") is None:
                 session_data["fallback_step"] = 1  # Always start at step 1
                 session_data["lead_data"] = {}  # Initialize lead data
+                session_data["fallback_completed"] = False  # Ensure not completed
                 await save_user_session(session_id, session_data)
                 logger.info(f"🚀 STRICT fallback initialized at step 1 for session {session_id}")
                 
-                # Return first question immediately
+                # Return first question immediately - DON'T process message on first init
                 first_step = next((s for s in steps if s["id"] == 1), None)
                 if first_step:
+                    logger.info(f"📝 Returning step 1 question: {first_step['question'][:50]}...")
                     return first_step["question"]
                 else:
                     return "Qual é o seu nome completo?"
@@ -338,40 +345,44 @@ class IntelligentHybridOrchestrator:
             current_step_id = session_data["fallback_step"]
             lead_data = session_data.get("lead_data", {})
             
+            logger.info(f"📊 Current fallback state - Step: {current_step_id}, Lead data keys: {list(lead_data.keys())}")
+            
             # Find current step in sorted steps
             current_step = next((s for s in steps if s["id"] == current_step_id), None)
             if not current_step:
                 logger.error(f"❌ Step {current_step_id} not found, resetting to step 1")
                 session_data["fallback_step"] = 1
+                session_data["lead_data"] = {}
+                session_data["fallback_completed"] = False
                 await save_user_session(session_id, session_data)
                 first_step = next((s for s in steps if s["id"] == 1), None)
                 return first_step["question"] if first_step else "Qual é o seu nome completo?"
             
-            # Process user's answer if provided
+            # Process user's answer if provided and not empty
             step_key = f"step_{current_step_id}"
             
-            # If user provided an answer and we haven't stored it yet
-            if message and message.strip():
+            # If user provided a meaningful answer
+            if message and message.strip() and len(message.strip()) > 0:
                 # Check if we already have an answer for this step
                 if step_key in lead_data:
-                    # Answer already stored, move to next step logic
-                    logger.info(f"📝 Answer already stored for step {current_step_id}, checking next step")
+                    # Answer already stored, but let's validate if we should advance
+                    logger.info(f"📝 Answer already exists for step {current_step_id}: {lead_data[step_key][:30]}...")
+                    # Don't re-process, just move to next step
                 else:
                     # Validate and store the answer
                     normalized_answer = self._validate_and_normalize_answer(message, current_step_id)
                     
                     if not self._should_advance_step(normalized_answer, current_step_id):
                         # Re-prompt same step with validation message
-                        logger.info(f"🔄 Invalid answer for step {current_step_id}, re-prompting")
+                        logger.info(f"🔄 Invalid answer '{normalized_answer[:30]}...' for step {current_step_id}, re-prompting")
                         validation_msg = self._get_validation_message(current_step_id)
                         return f"{validation_msg}\n\n{current_step['question']}"
                     
                     # Store the valid answer
                     lead_data[step_key] = normalized_answer
                     session_data["lead_data"] = lead_data
-                    await save_user_session(session_id, session_data)
                     
-                    logger.info(f"💾 Stored answer for step {current_step_id}: {normalized_answer[:50]}...")
+                    logger.info(f"💾 Stored answer for step {current_step_id}: {normalized_answer[:30]}...")
                 
                 # Find next step in sequence
                 next_step_id = current_step_id + 1
@@ -389,8 +400,13 @@ class IntelligentHybridOrchestrator:
                     await save_user_session(session_id, session_data)
                     logger.info(f"✅ Firebase fallback flow completed for session {session_id}")
                     return "Obrigado pelas informações! Para finalizar, preciso do seu número de WhatsApp com DDD (exemplo: 11999999999):"
+            else:
+                # No meaningful message provided, return current question
+                logger.info(f"📝 No meaningful message provided, returning current step {current_step_id} question")
+                return current_step["question"]
             
-            # If no message provided or we're just starting, return current question
+            # Fallback: return current question
+            logger.info(f"📝 Fallback: returning current step {current_step_id} question")
             return current_step["question"]
             
         except Exception as e:
@@ -468,28 +484,28 @@ class IntelligentHybridOrchestrator:
         answer = answer.strip()
         
         # Reject empty answers
-        if len(answer) < 1:
+        if not answer or len(answer) < 1:
             return False
             
         # Step 1: Name - require at least 2 words (first and last name)
         if step_id == 1:
             words = answer.split()
-            return len(words) >= 2 and all(len(word) >= 2 for word in words)
+            # More lenient: accept any name with at least 2 characters
+            return len(words) >= 1 and len(answer) >= 2
             
         # Step 2: Area - require at least 3 characters
         elif step_id == 2:
             return len(answer) >= 3
             
-        # Step 3: Situation - require at least 5 characters for meaningful description
+        # Step 3: Situation - require at least 3 characters for meaningful description
         elif step_id == 3:
-            return len(answer) >= 5
+            return len(answer) >= 3
             
         # Step 4: Meeting preference - accept any answer
         elif step_id == 4:
             return len(answer) >= 1
         
         # Default: require minimum length
-        return len(answer) >= 2
 
     async def _handle_phone_collection(
         self, 
@@ -637,14 +653,17 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
         """
         try:
             logger.info(f"🎯 Processing message - Session: {session_id}, Platform: {platform}")
+            logger.info(f"📝 Message content: '{message[:100]}...' (length: {len(message)})")
 
             session_data = await self._get_or_create_session(session_id, platform, phone_number)
+            logger.info(f"📊 Session state - Fallback step: {session_data.get('fallback_step')}, Completed: {session_data.get('fallback_completed')}, Phone submitted: {session_data.get('phone_submitted')}")
 
             # Check if we're collecting phone number in fallback mode
             if (session_data.get("fallback_completed") and 
                 not session_data.get("phone_submitted") and 
                 self._is_phone_number(message)):
                 
+                logger.info(f"📱 Processing phone number submission in fallback mode")
                 phone_response = await self._handle_phone_collection(message, session_id, session_data)
                 return {
                     "response_type": "phone_collected_fallback",
@@ -656,10 +675,12 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
                 }
 
             # Try Gemini first (AI-first approach)
+            logger.info(f"🤖 Attempting Gemini AI for session {session_id}")
             ai_response = await self._attempt_gemini_response(message, session_id, session_data)
             
             if ai_response:
                 # Gemini succeeded - use AI response
+                logger.info(f"✅ Gemini succeeded, using AI response")
                 session_data["last_message"] = message
                 session_data["last_response"] = ai_response
                 session_data["last_updated"] = ensure_utc(datetime.now(timezone.utc))
@@ -678,7 +699,9 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
             
             # Gemini failed - use STRICT Firebase fallback
             logger.info(f"⚡ Using STRICT Firebase fallback for session {session_id}")
+            logger.info(f"📊 Before fallback - Step: {session_data.get('fallback_step')}, Lead data: {list(session_data.get('lead_data', {}).keys())}")
             fallback_response = await self._get_fallback_response(session_data, message)
+            logger.info(f"📤 Fallback response generated: '{fallback_response[:100]}...'")
 
             # Update session
             session_data["last_message"] = message
@@ -686,6 +709,8 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
             session_data["last_updated"] = ensure_utc(datetime.now(timezone.utc))
             session_data["message_count"] = session_data.get("message_count", 0) + 1
             await save_user_session(session_id, session_data)
+            
+            logger.info(f"📊 After fallback - Step: {session_data.get('fallback_step')}, Completed: {session_data.get('fallback_completed')}")
 
             return {
                 "response_type": "fallback_firebase",
