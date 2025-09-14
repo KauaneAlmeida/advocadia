@@ -5,7 +5,7 @@ from app.services.firebase_service import (
     get_user_session,
     save_user_session,
     save_lead_data,
-    get_fallback_questions,   # ✅ Import para fallback
+    get_fallback_questions,
 )
 from app.services.ai_chain import ai_orchestrator
 from app.services.baileys_service import baileys_service
@@ -38,7 +38,9 @@ class IntelligentHybridOrchestrator:
             "platform": platform,
             "created_at": ensure_utc(datetime.now(timezone.utc)),
             "lead_data": {},
-            "message_count": 0
+            "message_count": 0,
+            "fallback_step": 1,  # Track current step in fallback flow
+            "phone_submitted": False
         }
 
         if phone_number:
@@ -49,21 +51,38 @@ class IntelligentHybridOrchestrator:
     def _extract_lead_info(self, message: str, session_data: Dict[str, Any]) -> Dict[str, Any]:
         extracted = {}
 
-        # Nome
-        if " " in message and not session_data["lead_data"].get("name"):
-            extracted["name"] = message.strip().title()
+        # Nome - look for full names (first + last name)
+        if " " in message.strip() and len(message.strip().split()) >= 2 and not session_data["lead_data"].get("name"):
+            # Check if it looks like a name (not a question or description)
+            if not any(word in message.lower() for word in ["como", "onde", "quando", "porque", "preciso", "quero", "tenho"]):
+                extracted["name"] = message.strip().title()
 
-        # Área do Direito
-        areas = ["Penal", "Civil", "Trabalhista", "Família", "Empresarial"]
-        for area in areas:
-            if area.lower() in message.lower() and not session_data["lead_data"].get("area_of_law"):
+        # Área do Direito - more comprehensive detection
+        areas_map = {
+            "penal": "Penal",
+            "criminal": "Penal", 
+            "civil": "Civil",
+            "trabalhista": "Trabalhista",
+            "trabalho": "Trabalhista",
+            "família": "Família",
+            "familia": "Família",
+            "divórcio": "Família",
+            "divorcio": "Família",
+            "empresarial": "Empresarial",
+            "empresa": "Empresarial",
+            "comercial": "Empresarial"
+        }
+        
+        for keyword, area in areas_map.items():
+            if keyword in message.lower() and not session_data["lead_data"].get("area_of_law"):
                 extracted["area_of_law"] = area
                 break
 
-        # Situação / Problema
-        if any(word in message.lower() for word in ["problema", "situação", "caso", "agressão", "divórcio"]):
-            if not session_data["lead_data"].get("situation"):
-                extracted["situation"] = message
+        # Situação - capture longer descriptions
+        if len(message.strip()) > 10 and not session_data["lead_data"].get("situation"):
+            # Check if it's a description (not a name or simple answer)
+            if any(word in message.lower() for word in ["problema", "situação", "caso", "preciso", "tenho", "aconteceu", "quero"]):
+                extracted["situation"] = message.strip()
 
         return extracted
 
@@ -106,6 +125,12 @@ class IntelligentHybridOrchestrator:
             "billing", "plan", "free tier", "requests per day"
         ]
         return any(indicator.lower() in str(error_message).lower() for indicator in quota_indicators)
+
+    def _is_phone_number(self, message: str) -> bool:
+        """Check if message looks like a phone number."""
+        clean_message = ''.join(filter(str.isdigit, message))
+        return len(clean_message) >= 10 and len(clean_message) <= 13
+
     async def process_message(
         self,
         message: str,
@@ -118,13 +143,18 @@ class IntelligentHybridOrchestrator:
 
             session_data = await self._get_or_create_session(session_id, platform, phone_number)
 
+            # Check if we're collecting phone number
+            if (self._should_save_lead(session_data) and 
+                not session_data.get("phone_submitted") and 
+                self._is_phone_number(message)):
+                return await self._handle_phone_collection(message, session_id, session_data)
+
+            # Extract lead information from message
             extracted_info = self._extract_lead_info(message, session_data)
             if extracted_info:
                 session_data["lead_data"].update(extracted_info)
                 await save_user_session(session_id, session_data)
                 logger.info(f"📝 Updated lead data: {extracted_info}")
-
-            context = self._prepare_ai_context(session_data, platform)
 
             ai_response = None
             
@@ -132,10 +162,16 @@ class IntelligentHybridOrchestrator:
             if self.gemini_available:
                 try:
                     logger.info("🤖 Attempting Gemini AI response...")
-                    gemini_response = await ai_orchestrator.generate_response(
-                        message,
-                        session_id,
-                        context=context
+                    context = self._prepare_ai_context(session_data, platform)
+                    
+                    import asyncio
+                    gemini_response = await asyncio.wait_for(
+                        ai_orchestrator.generate_response(
+                            message,
+                            session_id,
+                            context=context
+                        ),
+                        timeout=15.0
                     )
                     
                     # Check if Gemini response is valid
@@ -146,7 +182,7 @@ class IntelligentHybridOrchestrator:
                         ai_response = gemini_response
                         logger.info("✅ Valid Gemini response received")
                     else:
-                        logger.warning(f"⚠️ Invalid Gemini response detected: {gemini_response[:100] if gemini_response else 'None/Empty'}")
+                        logger.warning(f"⚠️ Invalid Gemini response detected")
                         ai_response = None
                         
                 except Exception as e:
@@ -162,9 +198,7 @@ class IntelligentHybridOrchestrator:
             else:
                 logger.info("⚠️ Gemini API unavailable - using fallback directly")
 
-            # ==============================
-            # 🔹 INTELLIGENT FALLBACK SYSTEM
-            # ==============================
+            # Use fallback system when Gemini is unavailable
             if not ai_response:
                 logger.info("⚡ Activating fallback system...")
                 ai_response = await self._get_fallback_response(session_data, message)
@@ -174,9 +208,11 @@ class IntelligentHybridOrchestrator:
                 ai_response = "Olá! Como posso ajudá-lo com questões jurídicas hoje?"
                 logger.warning("🚨 Using emergency fallback response")
 
+            # Save lead if ready
             if self._should_save_lead(session_data):
                 await self._save_lead_if_ready(session_data)
 
+            # Update session
             session_data["last_message"] = message
             session_data["last_response"] = ai_response
             session_data["last_updated"] = ensure_utc(datetime.now(timezone.utc))
@@ -206,147 +242,189 @@ class IntelligentHybridOrchestrator:
 
     async def _get_fallback_response(self, session_data: Dict[str, Any], message: str) -> str:
         """
-        Intelligent fallback system when Gemini AI is unavailable.
-        
-        Priority:
-        1. Try Firebase fallback questions
-        2. Use static conversation flow based on collected data
-        3. Emergency response
+        Clean fallback system without AI status messages.
+        Provides natural conversation flow for lead collection.
         """
         try:
-            # Try Firebase fallback first
-            logger.info("🔄 Trying Firebase fallback questions...")
-            fallback_questions = await get_fallback_questions()
+            lead_data = session_data.get("lead_data", {})
+            fallback_step = session_data.get("fallback_step", 1)
             
-            if fallback_questions and len(fallback_questions) > 0:
-                logger.info("✅ Using Firebase fallback questions")
-                lead_data = session_data.get("lead_data", {})
-                
-                # Determine which question to ask based on collected data
-                if not lead_data.get("name"):
-                    return fallback_questions[0] if len(fallback_questions) > 0 else "Qual é o seu nome completo?"
-                elif not lead_data.get("area_of_law"):
-                    return fallback_questions[1] if len(fallback_questions) > 1 else "Em qual área jurídica você precisa de ajuda?"
-                elif not lead_data.get("situation"):
-                    return fallback_questions[2] if len(fallback_questions) > 2 else "Pode descrever sua situação?"
+            # Step 1: Collect Name
+            if not lead_data.get("name"):
+                if fallback_step == 1:
+                    session_data["fallback_step"] = 1
+                    await save_user_session(session_data["session_id"], session_data)
+                    return "Olá! Para começar, qual é o seu nome completo?"
                 else:
-                    return fallback_questions[3] if len(fallback_questions) > 3 else "Gostaria de agendar uma consulta?"
+                    return "Por favor, me informe seu nome completo para continuarmos."
             
-            # Firebase fallback failed, use static flow
-            logger.info("🔄 Using static conversation flow fallback...")
-            return self._get_static_flow_response(session_data, message)
+            # Step 2: Collect Area of Law
+            elif not lead_data.get("area_of_law"):
+                name = lead_data.get("name", "").split()[0]  # First name only
+                if fallback_step <= 2:
+                    session_data["fallback_step"] = 2
+                    await save_user_session(session_data["session_id"], session_data)
+                    return f"Obrigado, {name}! Em qual área jurídica você precisa de ajuda?\n\n• Penal\n• Civil\n• Trabalhista\n• Família\n• Empresarial"
+                else:
+                    return "Qual área do direito se relaciona com sua situação? (Penal, Civil, Trabalhista, Família ou Empresarial)"
             
+            # Step 3: Collect Situation Description
+            elif not lead_data.get("situation"):
+                if fallback_step <= 3:
+                    session_data["fallback_step"] = 3
+                    await save_user_session(session_data["session_id"], session_data)
+                    return "Perfeito! Agora, pode descrever brevemente sua situação ou problema jurídico?"
+                else:
+                    return "Por favor, conte-me um pouco sobre sua situação para que possamos ajudá-lo melhor."
+            
+            # Step 4: Collect Phone Number
+            elif not session_data.get("phone_submitted"):
+                if fallback_step <= 4:
+                    session_data["fallback_step"] = 4
+                    await save_user_session(session_data["session_id"], session_data)
+                    return "Obrigado pelas informações! Para finalizar, preciso do seu número de WhatsApp com DDD (exemplo: 11999999999):"
+                else:
+                    return "Por favor, informe seu número de WhatsApp com DDD para continuarmos o atendimento."
+            
+            # All information collected
+            else:
+                name = lead_data.get("name", "").split()[0]
+                return f"Perfeito, {name}! Suas informações foram registradas. Nossa equipe especializada analisará seu caso e entrará em contato em breve. Há mais alguma coisa que gostaria de mencionar?"
+
         except Exception as e:
             logger.error(f"❌ Error in fallback system: {str(e)}")
-            return self._get_static_flow_response(session_data, message)
-    
-    def _get_static_flow_response(self, session_data: Dict[str, Any], message: str) -> str:
+            return "Como posso ajudá-lo com questões jurídicas hoje?"
+
+    async def _handle_phone_collection(self, phone_message: str, session_id: str, session_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Static conversation flow when all AI systems are unavailable.
-        Ensures the chatbot always responds appropriately.
+        Handle phone number collection and WhatsApp integration.
         """
-        lead_data = session_data.get("lead_data", {})
-        
-        # Add quota notice if Gemini is unavailable
-        quota_notice = ""
-        if not self.gemini_available:
-            quota_notice = "\n\n⚠️ Nosso sistema de IA está temporariamente indisponível, mas posso ajudá-lo com o básico!"
-        
-        # Check if we're collecting phone number
-        if (lead_data.get("name") and 
-            lead_data.get("area_of_law") and 
-            lead_data.get("situation") and 
-            not session_data.get("phone_submitted")):
-            return f"Perfeito! Agora preciso do seu número de WhatsApp com DDD para continuarmos o atendimento (ex: 11999999999):{quota_notice}"
-        
-        # Progressive data collection
-        if not lead_data.get("name"):
-            return f"Olá! Para começar, qual é o seu nome completo?{quota_notice}"
-        elif not lead_data.get("area_of_law"):
-            name = lead_data.get("name", "").split()[0]  # First name only
-            return f"Obrigado, {name}! Em qual área jurídica você precisa de ajuda?\n\n• Penal\n• Civil\n• Trabalhista\n• Família\n• Empresarial{quota_notice}"
-        elif not lead_data.get("situation"):
-            return f"Entendi. Agora, pode descrever brevemente a sua situação ou problema jurídico?{quota_notice}"
-        else:
-            # All basic info collected
-            name = lead_data.get("name", "").split()[0]
-            return f"Obrigado pelas informações, {name}! Nossa equipe especializada analisará seu caso e entrará em contato em breve. Há mais alguma coisa que gostaria de mencionar?{quota_notice}"
+        try:
+            # Clean and validate phone number
+            phone_clean = ''.join(filter(str.isdigit, phone_message))
+            
+            # Validate Brazilian phone number format
+            if len(phone_clean) < 10 or len(phone_clean) > 13:
+                return {
+                    "response_type": "validation_error",
+                    "session_id": session_id,
+                    "response": "Número inválido. Por favor, digite no formato com DDD (exemplo: 11999999999):",
+                    "lead_data": session_data.get("lead_data", {}),
+                    "message_count": session_data.get("message_count", 1)
+                }
+
+            # Format phone number for WhatsApp
+            if len(phone_clean) == 10:  # Add 9th digit for mobile
+                phone_formatted = f"55{phone_clean[:2]}9{phone_clean[2:]}"
+            elif len(phone_clean) == 11:  # Already has 9th digit
+                phone_formatted = f"55{phone_clean}"
+            elif phone_clean.startswith("55"):
+                phone_formatted = phone_clean
+            else:
+                phone_formatted = f"55{phone_clean}"
+
+            whatsapp_number = f"{phone_formatted}@s.whatsapp.net"
+
+            # Update session data
+            session_data.update({
+                "phone_number": phone_clean,
+                "phone_formatted": phone_formatted,
+                "phone_submitted": True,
+                "fallback_step": 5,
+                "last_updated": ensure_utc(datetime.now(timezone.utc))
+            })
+            await save_user_session(session_id, session_data)
+
+            # Save final lead data
+            await self._save_lead_if_ready(session_data)
+
+            # Prepare WhatsApp messages
+            lead_data = session_data.get("lead_data", {})
+            user_name = lead_data.get("name", "Cliente")
+            area = lead_data.get("area_of_law", "não informada")
+            situation = lead_data.get("situation", "não detalhada")[:100] + ("..." if len(lead_data.get("situation", "")) > 100 else "")
+
+            # Welcome message for user
+            welcome_message = f"""Olá {user_name}! 👋
+
+Recebemos sua solicitação através do nosso site e estamos aqui para ajudá-lo.
+
+📝 Área de interesse: {area}
+📖 Situação: {situation}
+
+Nossa equipe especializada analisará seu caso e entrará em contato em breve. Vamos continuar nossa conversa aqui no WhatsApp para maior comodidade.
+
+Como posso ajudá-lo hoje? 🤝"""
+
+            # Internal notification for law firm
+            notification_message = f"""🔔 *Nova Lead Capturada*
+
+👤 *Cliente:* {user_name}
+📱 *Telefone:* {phone_clean}
+🏛️ *Área:* {area}
+📝 *Situação:* {situation}
+🆔 *Sessão:* {session_id}
+⏰ *Data:* {datetime.now().strftime('%d/%m/%Y às %H:%M')}
+
+_Lead capturada automaticamente pelo sistema._"""
+
+            # Send WhatsApp messages
+            whatsapp_success = False
+            try:
+                # Send welcome message to user
+                await baileys_service.send_whatsapp_message(whatsapp_number, welcome_message)
+                
+                # Send notification to law firm (using configured phone number)
+                law_firm_number = "+5511918368812"  # From your config
+                await baileys_service.send_whatsapp_message(f"55{law_firm_number.replace('+', '').replace('-', '')}@s.whatsapp.net", notification_message)
+                
+                whatsapp_success = True
+                logger.info(f"✅ WhatsApp messages sent successfully to {phone_formatted}")
+                
+            except Exception as whatsapp_error:
+                logger.error(f"❌ Error sending WhatsApp messages: {str(whatsapp_error)}")
+                whatsapp_success = False
+
+            # Confirmation response
+            confirmation_response = f"""Perfeito! Número confirmado: {phone_clean} 📱
+
+✅ Suas informações foram registradas com sucesso.
+📞 Nossa equipe entrará em contato em breve.
+💬 Você também receberá uma mensagem no WhatsApp para continuarmos o atendimento.
+
+Obrigado por escolher nossos serviços jurídicos!"""
+
+            return {
+                "response_type": "phone_collected",
+                "session_id": session_id,
+                "response": confirmation_response,
+                "lead_data": lead_data,
+                "phone_number": phone_clean,
+                "whatsapp_sent": whatsapp_success,
+                "phone_submitted": True,
+                "message_count": session_data.get("message_count", 1) + 1
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error handling phone collection: {str(e)}")
+            return {
+                "response_type": "error",
+                "session_id": session_id,
+                "response": "Ocorreu um erro ao processar seu número. Por favor, tente novamente ou entre em contato conosco diretamente.",
+                "error": str(e)
+            }
 
     async def handle_phone_number_submission(
         self,
         phone_number: str,
         session_id: str
     ) -> Dict[str, Any]:
+        """
+        Handle phone number submission from web interface.
+        """
         try:
-            logger.info(f"📱 Handling phone submission: {phone_number} for session: {session_id}")
             session_data = await get_user_session(session_id) or {}
-
-            # Sanitizar número
-            phone_clean = ''.join(filter(str.isdigit, phone_number))
-
-            # Validar se é número BR
-            if len(phone_clean) == 10:  # sem nono dígito
-                phone_formatted = f"55{phone_clean[:2]}9{phone_clean[2:]}"
-            elif len(phone_clean) == 11:  # já tem nono dígito
-                phone_formatted = f"55{phone_clean}"
-            elif phone_clean.startswith("55"):
-                phone_formatted = phone_clean
-            else:
-                raise ValueError("Número inválido, use DDD + número.")
-
-            whatsapp_number = f"{phone_formatted}@s.whatsapp.net"
-
-            session_data.update({
-                "phone_number": phone_clean,
-                "phone_formatted": phone_formatted,
-                "phone_submitted": True,
-                "platform_transition": "web_to_whatsapp"
-            })
-            await save_user_session(session_id, session_data)
-
-            # 🔹 Monta mensagem inicial
-            lead_data = session_data.get("lead_data", {})
-            user_name = lead_data.get("name", "Cliente")
-            area = lead_data.get("area_of_law", "não informada")
-            situation = lead_data.get("situation", "não detalhada")
-
-            whatsapp_message = f"""Olá {user_name}! 👋
-
-Recebemos sua solicitação através do nosso site e estamos aqui para ajudá-lo com questões jurídicas.
-
-📝 Área de interesse: {area}  
-📖 Situação: {situation}  
-
-Nossa equipe especializada está pronta para analisar seu caso. Vamos continuar nossa conversa aqui no WhatsApp para maior comodidade.
-
-Como posso ajudá-lo hoje? 🤝"""
-
-            # 🔹 Segundo bloco: resumo
-            whatsapp_summary = f"""📁 Resumo do caso enviado pelo cliente:  
-- Nome: {user_name}  
-- Área: {area}  
-- Situação relatada: {situation}"""
-
-            # Enviar via Baileys
-            try:
-                await baileys_service.send_message(whatsapp_number, whatsapp_message)
-                await baileys_service.send_message(whatsapp_number, whatsapp_summary)
-                logger.info(f"✅ Mensagens enviadas para {phone_formatted} via WhatsApp")
-            except Exception as e:
-                logger.error(f"❌ Erro ao enviar mensagem no WhatsApp: {str(e)}")
-                return {
-                    "status": "error",
-                    "message": "Número salvo, mas não foi possível enviar mensagem no WhatsApp.",
-                    "error": str(e),
-                    "lead_data": lead_data
-                }
-
-            return {
-                "status": "success",
-                "message": f"Mensagens enviadas para {phone_formatted}",
-                "lead_data": lead_data
-            }
-
+            return await self._handle_phone_collection(phone_number, session_id, session_data)
         except Exception as e:
             logger.error(f"❌ Error in handle_phone_number_submission: {str(e)}")
             return {
@@ -355,6 +433,32 @@ Como posso ajudá-lo hoje? 🤝"""
                 "error": str(e)
             }
 
+    async def get_session_context(self, session_id: str) -> Dict[str, Any]:
+        """Get current session context and status."""
+        try:
+            session_data = await get_user_session(session_id)
+            if not session_data:
+                return {"exists": False}
 
+            lead_data = session_data.get("lead_data", {})
+            return {
+                "exists": True,
+                "session_id": session_id,
+                "platform": session_data.get("platform", "unknown"),
+                "fallback_step": session_data.get("fallback_step", 1),
+                "phone_submitted": session_data.get("phone_submitted", False),
+                "lead_data": lead_data,
+                "lead_complete": self._should_save_lead(session_data),
+                "message_count": session_data.get("message_count", 0),
+                "created_at": session_data.get("created_at"),
+                "last_updated": session_data.get("last_updated"),
+                "gemini_available": self.gemini_available
+            }
+        except Exception as e:
+            logger.error(f"❌ Error getting session context: {str(e)}")
+            return {"exists": False, "error": str(e)}
+
+
+# Global instance
 intelligent_orchestrator = IntelligentHybridOrchestrator()
 hybrid_orchestrator = intelligent_orchestrator
