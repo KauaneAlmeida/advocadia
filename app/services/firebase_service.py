@@ -91,12 +91,12 @@ async def get_conversation_flow() -> Dict[str, Any]:
             logger.info("📝 Criando fluxo de conversa padrão")
             default_flow = {
                 "steps": [
-                    {"id": 1, "question": "Olá! Qual é o seu nome completo?"},
-                    {"id": 2, "question": "Com qual área do direito você precisa de ajuda? (Penal, Civil, Trabalhista, Outro)"},
-                    {"id": 3, "question": "Por favor, descreva brevemente a sua situação."},
-                    {"id": 4, "question": "Gostaria que eu agendasse uma consulta com um advogado? (Sim ou Não)"},
+                    {"id": 1, "question": "Olá! Para começar, qual é o seu nome completo?"},
+                    {"id": 2, "question": "Em qual área do direito você precisa de ajuda?\n\n• Penal\n• Civil\n• Trabalhista\n• Família\n• Empresarial"},
+                    {"id": 3, "question": "Por favor, descreva brevemente sua situação ou problema jurídico."},
+                    {"id": 4, "question": "Gostaria de agendar uma consulta com nosso advogado especializado? (Sim ou Não)"},
                 ],
-                "completion_message": "Obrigado! Suas informações foram registradas e entraremos em contato em breve.",
+                "completion_message": "Perfeito! Suas informações foram registradas com sucesso. Nossa equipe especializada analisará seu caso e entrará em contato em breve. Obrigado por escolher nossos serviços jurídicos!",
                 "created_at": datetime.now(),
                 "updated_at": datetime.now(),
                 "version": "1.0",
@@ -125,6 +125,11 @@ async def get_conversation_flow() -> Dict[str, Any]:
                 })
 
         flow_data["steps"] = normalized_steps
+        
+        # Ensure completion_message exists
+        if "completion_message" not in flow_data:
+            flow_data["completion_message"] = "Obrigado! Suas informações foram registradas e entraremos em contato em breve."
+        
         return flow_data
 
     except Exception as e:
