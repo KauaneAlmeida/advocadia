@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>💬 Chat Shinobi — Dattebayo!</title>
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: url('https://imgur.com/b0gXXOI.png') no-repeat center center fixed;
+      background-size: cover;
+    }
+
+    .chat-container {
+      max-width: 500px;
+      width: 100%;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 15px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      height: 80vh;
+      backdrop-filter: blur(10px);
+      transition: all 0.3s ease;
+    }
+
+    .chat-header {
+      background: #ff9800;
+      color: white;
+      padding: 15px;
+      text-align: center;
+      font-size: 20px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      border-bottom: 2px solid #e07d00;
+    }
+
+    .messages {
+      flex: 1;
+      padding: 15px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .message {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+
+    .message.user {
+      justify-content: flex-end;
+    }
+
+    .bubble {
+      padding: 10px 15px;
+      border-radius: 15px;
+      max-width: 70%;
+      font-size: 14px;
+      line-height: 1.4;
+      position: relative;
+    }
+
+    .user .bubble {
+      background: #ff4500;
+      color: white;
+      border-bottom-right-radius: 0;
+    }
+
+    .bot .bubble {
+      background: #4682b4;
+      color: white;
+      border-bottom-left-radius: 0;
+    }
+
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid white;
+    }
+
+    .input-area {
+      display: flex;
+      border-top: 2px solid #444;
+      padding: 10px;
+      background: rgba(44, 44, 44, 0.9);
+    }
+
+    .input-area input {
+      flex: 1;
+      border: none;
+      border-radius: 20px;
+      padding: 12px;
+      font-size: 14px;
+      outline: none;
+      background: #444;
+      color: white;
+    }
+
+    .input-area input::placeholder {
+      color: #bbb;
+    }
+
+    .input-area button {
+      margin-left: 8px;
+      background: #ff9800;
+      border: none;
+      border-radius: 20px;
+      padding: 10px 20px;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    .input-area button:hover {
+      background: #e07d00;
+    }
+
+    @media (max-width: 600px) {
+      .chat-container {
+        width: 90%;
+        height: 70vh;
+        border-radius: 20px;
+        margin: auto;
+      }
+
+      .chat-header {
+        font-size: 16px;
+        padding: 10px;
+      }
+
+      .bubble {
+        font-size: 13px;
+        max-width: 80%;
+      }
+
+      .input-area input {
+        font-size: 13px;
+        padding: 10px;
+      }
+
+      .input-area button {
+        padding: 8px 16px;
+        font-size: 13px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="chat-container">
+    <div class="chat-header">💬 Chat Shinobi — Dattebayo! 💥</div>
+    <div id="messages" class="messages">
+      <div class="message bot">
+        <img src="https://imgur.com/8WbNd3B.png" class="avatar" alt="Kakashi">
+        <div class="bubble">Yo! Kakashi-sensei aqui 👀 Bem-vindo ao escritório, pronto para conversar?</div>
+      </div>
+    </div>
+    <div class="input-area">
+      <input id="messageInput" type="text" placeholder="Digite sua mensagem... 🍥">
+      <button onclick="sendMessage()">Enviar</button>
+    </div>
+  </div>
+
+  <script>
+    // API URL configuration for Docker and local development
+    const API_BASE_URL = window.location.port === '8080' 
+      ? ''  // Use relative URLs when accessing via nginx on port 8080 (Docker)
+      : window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+      ? 'http://localhost:8000'  // Direct backend access for development
+      : `${window.location.protocol}//${window.location.hostname}:8000`;
+
+    function addMessage(text, sender = 'user') {
+      const messagesDiv = document.getElementById('messages');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${sender}`;
+
+      const avatar = document.createElement('img');
+      avatar.className = 'avatar';
+      avatar.src = sender === 'user' 
+        ? 'https://imgur.com/vcCbXoV.png'
+        : 'https://imgur.com/8WbNd3B.png';
+      avatar.alt = sender;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+
+      if (sender === 'user') {
+        messageDiv.appendChild(bubble);
+        messageDiv.appendChild(avatar);
+      } else {
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(bubble);
+      }
+
+      messagesDiv.appendChild(messageDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('messageInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      addMessage(text, 'user');
+      input.value = '';
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/respond`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            message: text, 
+            session_id: localStorage.getItem('chat_session_id') || 'web_' + Date.now()
+          })
+        });
+
+        if (!response.ok) throw new Error('Erro na API');
+
+        const data = await response.json();
+        
+        // Store session ID for conversation continuity
+        if (data.session_id) {
+          localStorage.setItem('chat_session_id', data.session_id);
+        }
+        
+        // Handle different response types
+        const botMessage = data.response || data.question || data.reply || "🤔 O bot ficou em silêncio...";
+        addMessage(botMessage, 'bot');
+        
+        // Check if we need to collect phone number
+        if (data.collecting_phone || (data.flow_completed && !data.phone_collected)) {
+          // Add phone collection UI if needed
+          setTimeout(() => {
+            if (botMessage.includes('WhatsApp') || botMessage.includes('número')) {
+              addPhoneCollectionUI();
+            }
+          }, 1000);
+        }
+      } catch (err) {
+        console.error('API Error:', err);
+        addMessage("⚠️ Erro de conexão com o backend.", 'bot');
+      }
+    }
+    
+    function addPhoneCollectionUI() {
+      const messagesDiv = document.getElementById('messages');
+      const phoneDiv = document.createElement('div');
+      phoneDiv.className = 'message bot';
+      phoneDiv.innerHTML = `
+        <img src="https://imgur.com/8WbNd3B.png" class="avatar" alt="Kakashi">
+        <div class="bubble">
+          <div style="margin-bottom: 10px;">Para continuar no WhatsApp, digite seu número:</div>
+          <input type="tel" id="phoneInput" placeholder="11999999999" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 5px; margin-bottom: 10px;">
+          <button onclick="submitPhone()" style="background: #25D366; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer;">📱 Enviar</button>
+        </div>
+      `;
+      messagesDiv.appendChild(phoneDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+    
+    async function submitPhone() {
+      const phoneInput = document.getElementById('phoneInput');
+      const phone = phoneInput.value.trim();
+      if (!phone) return;
+      
+      try {
+        const sessionId = localStorage.getItem('chat_session_id');
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/submit-phone`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone_number: phone, session_id: sessionId })
+        });
+        
+        const data = await response.json();
+        addMessage(data.message || "✅ Número enviado! Verifique seu WhatsApp.", 'bot');
+        
+        // Remove phone input
+        phoneInput.parentElement.parentElement.remove();
+      } catch (err) {
+        console.error('Phone submission error:', err);
+        addMessage("❌ Erro ao enviar número. Tente novamente.", 'bot');
+      }
+    }
+    
+    // Initialize conversation on page load
+    window.addEventListener('load', async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/conversation/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.session_id) {
+            localStorage.setItem('chat_session_id', data.session_id);
+          }
+          if (data.question) {
+            addMessage(data.question, 'bot');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to initialize conversation:', err);
+      }
+    });
+
+    document.getElementById('messageInput').addEventListener('keypress', e => {
+      if (e.key === 'Enter') sendMessage();
+    });
+  </script>
+</body>
+</html>

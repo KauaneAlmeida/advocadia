@@ -1,0 +1,31 @@
+# Framework principal
+fastapi==0.103.2
+uvicorn[standard]==0.23.2
+
+# Manipulação de variáveis de ambiente
+python-dotenv==1.0.0
+
+# Logging e validação
+pydantic==1.10.13
+
+# Firebase (integração com Firestore, Auth, etc)
+firebase-admin==6.2.0
+
+# Google Gemini + LangChain (versões compatíveis)
+langchain==0.1.20
+langchain-community==0.0.38
+langchain-google-genai==0.0.6
+google-generativeai==0.3.2
+
+# Ferramentas auxiliares para chamadas assíncronas e HTTP
+httpx==0.24.1
+requests==2.31.0
+
+# Banco relacional (travado para compatibilidade)
+sqlalchemy==1.4.49
+
+# Outros utilitários
+python-multipart==0.0.6
+
+# Websockets (para comunicação com o bot do WhatsApp)
+websockets==11.0.3

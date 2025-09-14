@@ -1,0 +1,38 @@
+# Imagem base Node.js
+FROM node:20-alpine
+
+# Instalar curl (para health checks) e git (necessário para dependências npm)
+RUN apk add --no-cache curl git
+
+# Criar diretório da aplicação
+WORKDIR /app
+
+# Criar usuário não-root
+RUN addgroup -g 1001 -S appuser && \
+    adduser -S -D -H -u 1001 -h /app -s /sbin/nologin -G appuser appuser
+
+# Copiar package.json e package-lock.json (se tiver)
+COPY package*.json ./
+
+# Instalar dependências
+RUN npm install --omit=dev && npm cache clean --force
+
+# Copiar o restante do código da aplicação
+COPY . .
+
+# Dar permissão ao usuário e garantir diretório da sessão
+RUN mkdir -p /app/whatsapp_session && \
+    chown -R appuser:appuser /app
+
+# Trocar para usuário não-root
+USER appuser
+
+# Expor a porta usada pelo bot (3000)
+EXPOSE 3000
+
+# Healthcheck opcional (pinga o endpoint /health do bot)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+# Comando para rodar o bot
+CMD ["node", "whatsapp_baileys.js"]
