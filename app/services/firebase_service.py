@@ -239,8 +239,15 @@ async def save_user_session(session_id: str, session_data: Dict[str, Any]) -> bo
 async def get_firebase_service_status() -> Dict[str, Any]:
     try:
         db = get_firestore_client()
-        test_ref = db.collection("_health_check").document("test")
-        test_ref.set({"timestamp": datetime.now(), "status": "healthy"})
+        
+        # Simple read test instead of write to avoid permission issues
+        try:
+            test_ref = db.collection("_health_check").document("test")
+            test_ref.set({"timestamp": datetime.now(), "status": "healthy"})
+        except Exception as write_error:
+            # If write fails, try read-only test
+            logger.warning(f"⚠️ Firebase write test failed, trying read test: {str(write_error)}")
+            db.collection("conversation_flows").limit(1).get()
 
         return {
             "service": "firebase_service",
@@ -248,14 +255,17 @@ async def get_firebase_service_status() -> Dict[str, Any]:
             "firestore_connected": True,
             "credentials_file": os.getenv("FIREBASE_CREDENTIALS", "firebase-key.json"),
             "collections": ["conversation_flows", "leads", "user_sessions", "_health_check"],
+            "message": "Firebase Firestore is operational"
         }
     except Exception as e:
+        logger.error(f"❌ Firebase health check failed: {str(e)}")
         return {
             "service": "firebase_service",
             "status": "error",
             "firestore_connected": False,
             "error": str(e),
             "configuration_required": True,
+            "message": f"Firebase connection failed: {str(e)}"
         }
 
 

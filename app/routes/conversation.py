@@ -216,40 +216,21 @@ async def get_conversation_flow():
 @router.get("/conversation/service-status")
 async def conversation_service_status():
     """
-    Check overall service health: Firebase + AI + intelligent orchestration.
+    Check overall service health with improved error handling.
     """
     try:
-        # Firebase status
-        firebase_status = await get_firebase_service_status()
-
-        # AI service status
-        try:
-            from app.services.ai_chain import get_ai_service_status
-            ai_status = await get_ai_service_status()
-        except Exception as e:
-            ai_status = {"status": "error", "error": str(e)}
-
-        # Overall status
-        overall_status = (
-            "active" if firebase_status["status"] == "active" 
-            and ai_status["status"] == "active" 
-            else "degraded"
-        )
+        # Get comprehensive status from orchestrator
+        service_status = await intelligent_orchestrator.get_overall_service_status()
 
         return {
             "service": "intelligent_conversation_service",
-            "status": overall_status,
+            "status": service_status["overall_status"],
             "approach": "ai_powered_orchestration",
-            "firebase_status": firebase_status,
-            "ai_status": ai_status,
-            "features": {
-                "intelligent_responses": ai_status["status"] == "active",
-                "lead_collection": True,
-                "conversation_memory": True,
-                "context_awareness": True,
-                "flexible_dialogue": True,
-                "whatsapp_integration": True
-            },
+            "firebase_status": service_status["firebase_status"],
+            "ai_status": service_status["ai_status"],
+            "features": service_status["features"],
+            "gemini_available": service_status.get("gemini_available", False),
+            "fallback_mode": service_status.get("fallback_mode", True),
             "endpoints": {
                 "start": "/api/v1/conversation/start",
                 "respond": "/api/v1/conversation/respond",
@@ -262,4 +243,12 @@ async def conversation_service_status():
 
     except Exception as e:
         logger.error(f"❌ Error getting service status: {str(e)}")
-        return {"service": "conversation_service", "status": "error", "error": str(e)}
+        return {
+            "service": "intelligent_conversation_service", 
+            "status": "error", 
+            "approach": "ai_powered_orchestration",
+            "firebase_status": {"status": "unknown"},
+            "ai_status": {"status": "unknown"},
+            "features": {},
+            "error": str(e)
+        }

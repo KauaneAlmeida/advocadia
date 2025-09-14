@@ -23,8 +23,127 @@ def ensure_utc(dt: datetime) -> datetime:
 
 class IntelligentHybridOrchestrator:
     def __init__(self):
+        self.gemini_available = True  # Default to True, will be updated based on actual status
         self.gemini_timeout = 15.0  # 15 second timeout for Gemini calls
         self.law_firm_number = "+5511918368812"  # Internal notification number
+        
+    async def get_gemini_health_status(self) -> Dict[str, Any]:
+        """
+        Safe health check for Gemini AI service.
+        Returns status without raising exceptions.
+        """
+        try:
+            # Quick test of Gemini availability
+            import asyncio
+            test_response = await asyncio.wait_for(
+                ai_orchestrator.generate_response(
+                    "test", 
+                    session_id="__health_check__"
+                ),
+                timeout=5.0  # Short timeout for health checks
+            )
+            
+            # Clean up test session
+            ai_orchestrator.clear_session_memory("__health_check__")
+            
+            if test_response and isinstance(test_response, str) and test_response.strip():
+                self.gemini_available = True
+                return {
+                    "service": "gemini_ai",
+                    "status": "active",
+                    "available": True,
+                    "message": "Gemini AI is operational"
+                }
+            else:
+                self.gemini_available = False
+                return {
+                    "service": "gemini_ai", 
+                    "status": "inactive",
+                    "available": False,
+                    "message": "Gemini AI returned invalid response"
+                }
+                
+        except asyncio.TimeoutError:
+            self.gemini_available = False
+            return {
+                "service": "gemini_ai",
+                "status": "inactive", 
+                "available": False,
+                "message": "Gemini AI timeout - likely quota exceeded"
+            }
+        except Exception as e:
+            self.gemini_available = False
+            error_str = str(e).lower()
+            
+            if self._is_quota_error(error_str):
+                return {
+                    "service": "gemini_ai",
+                    "status": "quota_exceeded",
+                    "available": False, 
+                    "message": f"Gemini API quota exceeded: {str(e)}"
+                }
+            else:
+                return {
+                    "service": "gemini_ai",
+                    "status": "error",
+                    "available": False,
+                    "message": f"Gemini AI error: {str(e)}"
+                }
+    
+    async def get_overall_service_status(self) -> Dict[str, Any]:
+        """
+        Get comprehensive service status including Firebase, AI, and overall health.
+        """
+        try:
+            # Check Firebase status
+            firebase_status = await get_firebase_service_status()
+            
+            # Check Gemini AI status
+            ai_status = await self.get_gemini_health_status()
+            
+            # Determine overall status
+            firebase_healthy = firebase_status.get("status") == "active"
+            ai_healthy = ai_status.get("status") == "active"
+            
+            if firebase_healthy and ai_healthy:
+                overall_status = "active"
+            elif firebase_healthy:
+                overall_status = "degraded"  # Firebase works, AI doesn't
+            else:
+                overall_status = "error"  # Firebase issues are critical
+            
+            return {
+                "overall_status": overall_status,
+                "firebase_status": firebase_status,
+                "ai_status": ai_status,
+                "features": {
+                    "conversation_flow": firebase_healthy,
+                    "ai_responses": ai_healthy,
+                    "fallback_mode": firebase_healthy and not ai_healthy,
+                    "whatsapp_integration": True,  # Assumed available
+                    "lead_collection": firebase_healthy
+                },
+                "gemini_available": self.gemini_available,
+                "fallback_mode": not self.gemini_available
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting overall service status: {str(e)}")
+            return {
+                "overall_status": "error",
+                "firebase_status": {"status": "error", "error": str(e)},
+                "ai_status": {"status": "error", "error": str(e)},
+                "features": {
+                    "conversation_flow": False,
+                    "ai_responses": False,
+                    "fallback_mode": False,
+                    "whatsapp_integration": False,
+                    "lead_collection": False
+                },
+                "gemini_available": False,
+                "fallback_mode": True,
+                "error": str(e)
+            }
 
     async def _get_or_create_session(
         self,

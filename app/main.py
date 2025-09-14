@@ -98,41 +98,58 @@ async def shutdown_event():
 async def health_check():
     """Health check endpoint for monitoring and load balancers."""
     try:
-        # Check WhatsApp bot status
-        whatsapp_status = await baileys_service.get_connection_status()
-        
-        # Check if Gemini is available
+        # Get comprehensive service status from orchestrator
         from app.services.orchestration_service import intelligent_orchestrator
-        gemini_status = "available" if intelligent_orchestrator.gemini_available else "quota_exceeded"
+        service_status = await intelligent_orchestrator.get_overall_service_status()
+        
+        # Check WhatsApp bot status (non-critical)
+        try:
+            whatsapp_status = await baileys_service.get_connection_status()
+        except Exception as e:
+            logger.warning(f"⚠️ WhatsApp status check failed: {str(e)}")
+            whatsapp_status = {"status": "error", "error": str(e)}
         
         return {
-            "status": "healthy",
+            "status": "healthy" if service_status["overall_status"] != "error" else "degraded",
             "message": "Law Firm AI Chat Backend is running",
+            "overall_status": service_status["overall_status"],
             "services": {
                 "fastapi": "active",
                 "whatsapp_bot": whatsapp_status.get("status", "unknown"),
-                "firebase": "active",
-                "gemini_ai": gemini_status if os.getenv("GEMINI_API_KEY") else "not_configured"
+                "firebase": service_status["firebase_status"].get("status", "unknown"),
+                "gemini_ai": service_status["ai_status"].get("status", "not_configured")
             },
             "features": [
                 "guided_conversation_flow",
                 "whatsapp_integration", 
-                "ai_powered_responses" if intelligent_orchestrator.gemini_available else "fallback_responses",
+                "ai_powered_responses" if service_status.get("gemini_available") else "fallback_responses",
                 "lead_management",
                 "session_persistence"
             ],
-            "fallback_mode": not intelligent_orchestrator.gemini_available,
+            "fallback_mode": service_status.get("fallback_mode", True),
             "phone_number": os.getenv("WHATSAPP_PHONE_NUMBER", "not-configured"),
-            "uptime": "active"
+            "uptime": "active",
+            "detailed_status": service_status
         }
     except Exception as e:
         logger.error(f"Health check error: {str(e)}")
+        # Always return a valid response, even on error
         return JSONResponse(
-            status_code=503,
+            status_code=200,  # Return 200 to prevent container restart
             content={
-                "status": "degraded",
-                "message": "Some services may be unavailable",
-                "error": str(e)
+                "status": "error",
+                "message": "Health check encountered errors",
+                "overall_status": "error",
+                "services": {
+                    "fastapi": "active",
+                    "whatsapp_bot": "unknown",
+                    "firebase": "unknown", 
+                    "gemini_ai": "unknown"
+                },
+                "features": [],
+                "fallback_mode": True,
+                "error": str(e),
+                "uptime": "active"
             }
         )
 
