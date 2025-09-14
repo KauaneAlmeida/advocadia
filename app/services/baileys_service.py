@@ -27,7 +27,12 @@ class BaileysWhatsAppService:
             # Test connection with retries
             for attempt in range(self.max_retries):
                 try:
-                    response = requests.get(f"{self.base_url}/health", timeout=10)
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        None, 
+                        lambda: requests.get(f"{self.base_url}/health", timeout=10)
+                    )
                     if response.status_code == 200:
                         logger.info("✅ WhatsApp bot service connection established")
                         return True
@@ -75,10 +80,15 @@ class BaileysWhatsAppService:
             
             logger.info(f"📤 Sending WhatsApp message to {phone_number[:15]}...")
             
-            response = requests.post(
-                f"{self.base_url}/send-message",
-                json=payload,
-                timeout=self.timeout
+            import asyncio
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    f"{self.base_url}/send-message",
+                    json=payload,
+                    timeout=self.timeout
+                )
             )
             
             if response.status_code == 200:
@@ -111,7 +121,12 @@ class BaileysWhatsAppService:
             Dict[str, Any]: Status information
         """
         try:
-            response = requests.get(f"{self.base_url}/api/qr-status", timeout=10)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.get(f"{self.base_url}/api/qr-status", timeout=10)
+            )
             
             if response.status_code == 200:
                 data = response.json()
@@ -156,7 +171,12 @@ class BaileysWhatsAppService:
             Dict[str, Any]: Health status
         """
         try:
-            response = requests.get(f"{self.base_url}/health", timeout=10)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.get(f"{self.base_url}/health", timeout=10)
+            )
             
             if response.status_code == 200:
                 return response.json()

@@ -6,6 +6,7 @@ from app.services.firebase_service import (
     save_user_session,
     save_lead_data,
     get_conversation_flow,
+    get_firebase_service_status
 )
 from app.services.ai_chain import ai_orchestrator
 from app.services.baileys_service import baileys_service

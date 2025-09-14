@@ -240,14 +240,15 @@ async def get_firebase_service_status() -> Dict[str, Any]:
     try:
         db = get_firestore_client()
         
-        # Simple read test instead of write to avoid permission issues
+        # Test Firebase connection with a simple operation
         try:
-            test_ref = db.collection("_health_check").document("test")
-            test_ref.set({"timestamp": datetime.now(), "status": "healthy"})
-        except Exception as write_error:
-            # If write fails, try read-only test
-            logger.warning(f"⚠️ Firebase write test failed, trying read test: {str(write_error)}")
-            db.collection("conversation_flows").limit(1).get()
+            # Try a simple read operation to test connection
+            test_collection = db.collection("conversation_flows").limit(1)
+            docs = test_collection.get()
+            logger.info("✅ Firebase Firestore connection test successful")
+        except Exception as read_error:
+            logger.error(f"❌ Firebase Firestore connection test failed: {str(read_error)}")
+            raise read_error
 
         return {
             "service": "firebase_service",
@@ -255,7 +256,8 @@ async def get_firebase_service_status() -> Dict[str, Any]:
             "firestore_connected": True,
             "credentials_file": os.getenv("FIREBASE_CREDENTIALS", "firebase-key.json"),
             "collections": ["conversation_flows", "leads", "user_sessions", "_health_check"],
-            "message": "Firebase Firestore is operational"
+            "message": "Firebase Firestore is operational",
+            "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
         logger.error(f"❌ Firebase health check failed: {str(e)}")
@@ -265,7 +267,8 @@ async def get_firebase_service_status() -> Dict[str, Any]:
             "firestore_connected": False,
             "error": str(e),
             "configuration_required": True,
-            "message": f"Firebase connection failed: {str(e)}"
+            "message": f"Firebase connection failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
         }
 
 

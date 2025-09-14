@@ -16,7 +16,8 @@ from app.services.firebase_service import (
     get_conversation_flow,
     save_lead_data,
     get_user_session,
-    save_user_session
+    save_user_session,
+    update_lead_data
 )
 from app.services.ai_service import process_chat_message
 from app.services.baileys_service import baileys_service
@@ -216,8 +217,7 @@ class ConversationManager:
             await save_user_session(session_id, session_data)
 
             # Atualiza lead com telefone
-            await save_lead_data({
-                "lead_id": session_data.get("lead_id"),
+            await update_lead_data(session_data.get("lead_id"), {
                 "phone_number": phone_clean,
                 "phone_formatted": phone_formatted,
                 "status": "phone_collected",

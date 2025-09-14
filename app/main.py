@@ -69,12 +69,20 @@ async def startup_event():
     
     try:
         # Initialize Firebase
-        initialize_firebase()
-        logger.info("✅ Firebase initialized successfully")
+        try:
+            initialize_firebase()
+            logger.info("✅ Firebase initialized successfully")
+        except Exception as firebase_error:
+            logger.error(f"❌ Firebase initialization failed: {str(firebase_error)}")
+            # Don't exit - let the app start but log the error
         
         # Initialize Baileys service connection
-        await baileys_service.initialize()
-        logger.info("✅ Baileys WhatsApp service connection initialized")
+        try:
+            await baileys_service.initialize()
+            logger.info("✅ Baileys WhatsApp service connection initialized")
+        except Exception as baileys_error:
+            logger.error(f"❌ Baileys initialization failed: {str(baileys_error)}")
+            # Don't exit - let the app start but log the error
         
     except Exception as e:
         logger.error(f"❌ Startup initialization failed: {str(e)}")

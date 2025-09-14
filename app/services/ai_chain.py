@@ -45,7 +45,9 @@ class AIOrchestrator:
             api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
             
             if not api_key:
-                raise ValueError("GOOGLE_API_KEY or GEMINI_API_KEY environment variable not set")
+                logger.warning("⚠️ GOOGLE_API_KEY or GEMINI_API_KEY environment variable not set")
+                self.llm = None
+                return
 
             self.llm = ChatGoogleGenerativeAI(
                 model="gemini-1.5-flash",
@@ -58,7 +60,7 @@ class AIOrchestrator:
             logger.info("✅ LangChain + Gemini LLM initialized successfully")
         except Exception as e:
             logger.error(f"❌ Error initializing LLM: {str(e)}")
-            raise
+            self.llm = None
 
     def _load_system_prompt(self):
         """Load system prompt from .env, JSON file, or use default."""
@@ -120,6 +122,11 @@ Você **não agenda consultas**, apenas coleta as informações e organiza para 
     def _setup_chain(self):
         """Create LangChain conversation chain."""
         try:
+            if self.llm is None:
+                logger.warning("⚠️ Cannot setup chain - LLM not initialized")
+                self.chain = None
+                return
+                
             prompt = ChatPromptTemplate.from_messages([
                 ("system", self.system_prompt),
                 MessagesPlaceholder(variable_name="history"),
@@ -139,7 +146,7 @@ Você **não agenda consultas**, apenas coleta as informações e organiza para 
             logger.info("✅ LangChain conversation chain setup complete")
         except Exception as e:
             logger.error(f"❌ Error setting up chain: {str(e)}")
-            raise
+            self.chain = None
 
     def _get_session_history(self, session_id: str) -> list:
         """Get session conversation history."""
@@ -157,6 +164,9 @@ Você **não agenda consultas**, apenas coleta as informações e organiza para 
     ) -> str:
         """Generate AI response using LangChain + Gemini with context."""
         try:
+            if self.llm is None:
+                raise Exception("LLM not initialized - check API key configuration")
+                
             if session_id not in conversation_memories:
                 conversation_memories[session_id] = ConversationBufferWindowMemory(
                     k=10, return_messages=True
@@ -278,19 +288,35 @@ def get_conversation_summary(session_id: str) -> Dict[str, Any]:
 async def get_ai_service_status() -> Dict[str, Any]:
     """Get AI service status."""
     try:
-        test_response = await ai_orchestrator.generate_response(
-            "teste", 
-            session_id="__status_test__"
-        )
-        ai_orchestrator.clear_session_memory("__status_test__")
+        # Quick test without generating a full response to avoid quota usage
+        api_key_configured = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
+        
+        if not api_key_configured:
+            return {
+                "service": "ai_service",
+                "status": "configuration_required",
+                "error": "API key not configured",
+                "api_key_configured": False,
+                "configuration_required": True,
+            }
+        
+        # Test LLM initialization without making API calls
+        if ai_orchestrator.llm is None:
+            return {
+                "service": "ai_service",
+                "status": "error",
+                "error": "LLM not initialized",
+                "api_key_configured": api_key_configured,
+                "configuration_required": True,
+            }
 
         return {
             "service": "ai_service",
             "status": "active",
             "message": "LangChain + Gemini operational",
-            "test_response_length": len(test_response),
+            "llm_initialized": True,
             "system_prompt_configured": bool(ai_orchestrator.system_prompt),
-            "api_key_configured": bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")),
+            "api_key_configured": api_key_configured,
             "features": [
                 "langchain_integration",
                 "gemini_api",
@@ -307,6 +333,7 @@ async def get_ai_service_status() -> Dict[str, Any]:
             "status": "error",
             "error": str(e),
             "configuration_required": True,
+            "api_key_configured": bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")),
         }
 
 
