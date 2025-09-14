@@ -119,36 +119,43 @@ class IntelligentHybridOrchestrator:
 
             ai_response = None
             try:
-                ai_response = await ai_orchestrator.generate_response(
+                logger.info("🤖 Attempting Gemini AI response...")
+                gemini_response = await ai_orchestrator.generate_response(
                     message,
                     session_id,
                     context=context
                 )
-            except Exception as e:
-                logger.warning(f"⚠️ AI fallback activated (Gemini error): {str(e)}")
-
-            # ------------------------------
-            # 🔹 Fallback inteligente
-            # ------------------------------
-            if not ai_response:
-                logger.info("⚡ AI response is empty, trying Firebase fallback")
-                fallback_questions = await get_fallback_questions()
-
-                if fallback_questions:
-                    ai_response = "No momento estou com instabilidade, mas podemos seguir com estas perguntas:\n\n"
-                    for q in fallback_questions:
-                        ai_response += f"- {q}\n"
+                
+                # Check if Gemini response is valid
+                if (gemini_response and 
+                    isinstance(gemini_response, str) and 
+                    gemini_response.strip() and
+                    "429" not in gemini_response and
+                    "quota" not in gemini_response.lower() and
+                    "rate limit" not in gemini_response.lower() and
+                    "api key" not in gemini_response.lower() and
+                    "error" not in gemini_response.lower()[:50]):  # Check only first 50 chars for error
+                    ai_response = gemini_response
+                    logger.info("✅ Valid Gemini response received")
                 else:
-                    # Fluxo fixo
-                    lead_data = session_data.get("lead_data", {})
-                    if not lead_data.get("name"):
-                        ai_response = "Olá! Qual é o seu nome completo?"
-                    elif not lead_data.get("area_of_law"):
-                        ai_response = "Ok, obrigado. Em qual área jurídica você precisa de ajuda? (Penal, Civil, Trabalhista, Família ou Empresarial)"
-                    elif not lead_data.get("situation"):
-                        ai_response = "Entendi. Pode descrever brevemente a sua situação?"
-                    else:
-                        ai_response = "Perfeito, já tenho suas informações. Agora, poderia informar seu número de WhatsApp para continuarmos por lá?"
+                    logger.warning(f"⚠️ Invalid Gemini response detected: {gemini_response[:100] if gemini_response else 'None/Empty'}")
+                    ai_response = None
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Gemini AI failed: {str(e)}")
+                ai_response = None
+
+            # ==============================
+            # 🔹 INTELLIGENT FALLBACK SYSTEM
+            # ==============================
+            if not ai_response:
+                logger.info("⚡ Activating fallback system...")
+                ai_response = await self._get_fallback_response(session_data, message)
+
+            # Ensure we always have a response
+            if not ai_response or not ai_response.strip():
+                ai_response = "Olá! Como posso ajudá-lo com questões jurídicas hoje?"
+                logger.warning("🚨 Using emergency fallback response")
 
             if self._should_save_lead(session_data):
                 await self._save_lead_if_ready(session_data)
@@ -178,6 +185,69 @@ class IntelligentHybridOrchestrator:
                 "response": "Desculpe, ocorreu um erro interno. Nossa equipe foi notificada.",
                 "error": str(e)
             }
+
+    async def _get_fallback_response(self, session_data: Dict[str, Any], message: str) -> str:
+        """
+        Intelligent fallback system when Gemini AI is unavailable.
+        
+        Priority:
+        1. Try Firebase fallback questions
+        2. Use static conversation flow based on collected data
+        3. Emergency response
+        """
+        try:
+            # Try Firebase fallback first
+            logger.info("🔄 Trying Firebase fallback questions...")
+            fallback_questions = await get_fallback_questions()
+            
+            if fallback_questions and len(fallback_questions) > 0:
+                logger.info("✅ Using Firebase fallback questions")
+                lead_data = session_data.get("lead_data", {})
+                
+                # Determine which question to ask based on collected data
+                if not lead_data.get("name"):
+                    return fallback_questions[0] if len(fallback_questions) > 0 else "Qual é o seu nome completo?"
+                elif not lead_data.get("area_of_law"):
+                    return fallback_questions[1] if len(fallback_questions) > 1 else "Em qual área jurídica você precisa de ajuda?"
+                elif not lead_data.get("situation"):
+                    return fallback_questions[2] if len(fallback_questions) > 2 else "Pode descrever sua situação?"
+                else:
+                    return fallback_questions[3] if len(fallback_questions) > 3 else "Gostaria de agendar uma consulta?"
+            
+            # Firebase fallback failed, use static flow
+            logger.info("🔄 Using static conversation flow fallback...")
+            return self._get_static_flow_response(session_data, message)
+            
+        except Exception as e:
+            logger.error(f"❌ Error in fallback system: {str(e)}")
+            return self._get_static_flow_response(session_data, message)
+    
+    def _get_static_flow_response(self, session_data: Dict[str, Any], message: str) -> str:
+        """
+        Static conversation flow when all AI systems are unavailable.
+        Ensures the chatbot always responds appropriately.
+        """
+        lead_data = session_data.get("lead_data", {})
+        
+        # Check if we're collecting phone number
+        if (lead_data.get("name") and 
+            lead_data.get("area_of_law") and 
+            lead_data.get("situation") and 
+            not session_data.get("phone_submitted")):
+            return "Perfeito! Agora preciso do seu número de WhatsApp com DDD para continuarmos o atendimento (ex: 11999999999):"
+        
+        # Progressive data collection
+        if not lead_data.get("name"):
+            return "Olá! Para começar, qual é o seu nome completo?"
+        elif not lead_data.get("area_of_law"):
+            name = lead_data.get("name", "").split()[0]  # First name only
+            return f"Obrigado, {name}! Em qual área jurídica você precisa de ajuda?\n\n• Penal\n• Civil\n• Trabalhista\n• Família\n• Empresarial"
+        elif not lead_data.get("situation"):
+            return "Entendi. Agora, pode descrever brevemente a sua situação ou problema jurídico?"
+        else:
+            # All basic info collected
+            name = lead_data.get("name", "").split()[0]
+            return f"Obrigado pelas informações, {name}! Nossa equipe especializada analisará seu caso e entrará em contato em breve. Há mais alguma coisa que gostaria de mencionar?"
 
     async def handle_phone_number_submission(
         self,
