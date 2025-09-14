@@ -101,6 +101,10 @@ async def health_check():
         # Check WhatsApp bot status
         whatsapp_status = await baileys_service.get_connection_status()
         
+        # Check if Gemini is available
+        from app.services.orchestration_service import intelligent_orchestrator
+        gemini_status = "available" if intelligent_orchestrator.gemini_available else "quota_exceeded"
+        
         return {
             "status": "healthy",
             "message": "Law Firm AI Chat Backend is running",
@@ -108,15 +112,16 @@ async def health_check():
                 "fastapi": "active",
                 "whatsapp_bot": whatsapp_status.get("status", "unknown"),
                 "firebase": "active",
-                "gemini_ai": "configured" if os.getenv("GEMINI_API_KEY") else "not_configured"
+                "gemini_ai": gemini_status if os.getenv("GEMINI_API_KEY") else "not_configured"
             },
             "features": [
                 "guided_conversation_flow",
                 "whatsapp_integration", 
-                "ai_powered_responses",
+                "ai_powered_responses" if intelligent_orchestrator.gemini_available else "fallback_responses",
                 "lead_management",
                 "session_persistence"
             ],
+            "fallback_mode": not intelligent_orchestrator.gemini_available,
             "phone_number": os.getenv("WHATSAPP_PHONE_NUMBER", "not-configured"),
             "uptime": "active"
         }

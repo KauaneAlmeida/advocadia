@@ -179,10 +179,29 @@ Você **não agenda consultas**, apenas coleta as informações e organiza para 
                 if context_info:
                     contextual_message = f"[Contexto: {'; '.join(context_info)}] {message}"
 
-            response = await self.chain.ainvoke({
-                "input": contextual_message, 
-                "session_id": session_id
-            })
+            # Add timeout and better error handling
+            import asyncio
+            
+            try:
+                response = await asyncio.wait_for(
+                    self.chain.ainvoke({
+                        "input": contextual_message, 
+                        "session_id": session_id
+                    }),
+                    timeout=15.0  # 15 second timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error("⏰ Gemini API request timed out")
+                raise Exception("API timeout - quota may be exceeded")
+            except Exception as api_error:
+                # Check for quota/rate limit errors
+                error_str = str(api_error).lower()
+                if any(indicator in error_str for indicator in ["429", "quota", "rate limit", "resourceexhausted", "billing"]):
+                    logger.error(f"🚫 Gemini API quota/rate limit error: {api_error}")
+                    raise Exception(f"Quota exceeded: {api_error}")
+                else:
+                    logger.error(f"❌ Gemini API error: {api_error}")
+                    raise api_error
 
             memory.chat_memory.add_user_message(message)
             memory.chat_memory.add_ai_message(response)
@@ -192,7 +211,8 @@ Você **não agenda consultas**, apenas coleta as informações e organiza para 
 
         except Exception as e:
             logger.error(f"❌ Error generating response: {str(e)}")
-            return self._get_fallback_response()
+            # Re-raise the exception so orchestrator can handle it properly
+            raise e
 
     def _get_fallback_response(self) -> str:
         """Fallback response when AI fails."""

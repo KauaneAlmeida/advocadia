@@ -24,6 +24,8 @@ def ensure_utc(dt: datetime) -> datetime:
 class IntelligentHybridOrchestrator:
     def __init__(self):
         self.lead_fields = ["name", "area_of_law", "situation"]
+        self.gemini_available = True
+        self.last_gemini_check = None
 
     async def _get_or_create_session(
         self,
@@ -97,6 +99,13 @@ class IntelligentHybridOrchestrator:
             await save_lead_data({"answers": answers})
             logger.info(f"💾 Lead salvo no Firestore: {answers}")
 
+    def _is_quota_error(self, error_message: str) -> bool:
+        """Check if error is related to API quota/rate limits."""
+        quota_indicators = [
+            "429", "quota", "rate limit", "exceeded", "ResourceExhausted",
+            "billing", "plan", "free tier", "requests per day"
+        ]
+        return any(indicator.lower() in str(error_message).lower() for indicator in quota_indicators)
     async def process_message(
         self,
         message: str,
@@ -118,32 +127,40 @@ class IntelligentHybridOrchestrator:
             context = self._prepare_ai_context(session_data, platform)
 
             ai_response = None
-            try:
-                logger.info("🤖 Attempting Gemini AI response...")
-                gemini_response = await ai_orchestrator.generate_response(
-                    message,
-                    session_id,
-                    context=context
-                )
-                
-                # Check if Gemini response is valid
-                if (gemini_response and 
-                    isinstance(gemini_response, str) and 
-                    gemini_response.strip() and
-                    "429" not in gemini_response and
-                    "quota" not in gemini_response.lower() and
-                    "rate limit" not in gemini_response.lower() and
-                    "api key" not in gemini_response.lower() and
-                    "error" not in gemini_response.lower()[:50]):  # Check only first 50 chars for error
-                    ai_response = gemini_response
-                    logger.info("✅ Valid Gemini response received")
-                else:
-                    logger.warning(f"⚠️ Invalid Gemini response detected: {gemini_response[:100] if gemini_response else 'None/Empty'}")
-                    ai_response = None
+            
+            # Only try Gemini if we think it's available
+            if self.gemini_available:
+                try:
+                    logger.info("🤖 Attempting Gemini AI response...")
+                    gemini_response = await ai_orchestrator.generate_response(
+                        message,
+                        session_id,
+                        context=context
+                    )
                     
-            except Exception as e:
-                logger.warning(f"⚠️ Gemini AI failed: {str(e)}")
-                ai_response = None
+                    # Check if Gemini response is valid
+                    if (gemini_response and 
+                        isinstance(gemini_response, str) and 
+                        gemini_response.strip() and
+                        not self._is_quota_error(gemini_response)):
+                        ai_response = gemini_response
+                        logger.info("✅ Valid Gemini response received")
+                    else:
+                        logger.warning(f"⚠️ Invalid Gemini response detected: {gemini_response[:100] if gemini_response else 'None/Empty'}")
+                        ai_response = None
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Gemini AI failed: {str(e)}")
+                    
+                    # Check if it's a quota error and disable Gemini temporarily
+                    if self._is_quota_error(str(e)):
+                        logger.error("🚫 Gemini API quota exceeded - switching to fallback mode")
+                        self.gemini_available = False
+                        self.last_gemini_check = datetime.now(timezone.utc)
+                    
+                    ai_response = None
+            else:
+                logger.info("⚠️ Gemini API unavailable - using fallback directly")
 
             # ==============================
             # 🔹 INTELLIGENT FALLBACK SYSTEM
@@ -167,13 +184,14 @@ class IntelligentHybridOrchestrator:
             await save_user_session(session_id, session_data)
 
             return {
-                "response_type": "ai_intelligent",
+                "response_type": "ai_intelligent" if self.gemini_available else "fallback_intelligent",
                 "platform": platform,
                 "session_id": session_id,
                 "response": ai_response,
                 "ai_mode": bool(ai_response),
                 "lead_data": session_data.get("lead_data", {}),
-                "message_count": session_data.get("message_count", 1)
+                "message_count": session_data.get("message_count", 1),
+                "gemini_available": self.gemini_available
             }
 
         except Exception as e:
@@ -229,25 +247,30 @@ class IntelligentHybridOrchestrator:
         """
         lead_data = session_data.get("lead_data", {})
         
+        # Add quota notice if Gemini is unavailable
+        quota_notice = ""
+        if not self.gemini_available:
+            quota_notice = "\n\n⚠️ Nosso sistema de IA está temporariamente indisponível, mas posso ajudá-lo com o básico!"
+        
         # Check if we're collecting phone number
         if (lead_data.get("name") and 
             lead_data.get("area_of_law") and 
             lead_data.get("situation") and 
             not session_data.get("phone_submitted")):
-            return "Perfeito! Agora preciso do seu número de WhatsApp com DDD para continuarmos o atendimento (ex: 11999999999):"
+            return f"Perfeito! Agora preciso do seu número de WhatsApp com DDD para continuarmos o atendimento (ex: 11999999999):{quota_notice}"
         
         # Progressive data collection
         if not lead_data.get("name"):
-            return "Olá! Para começar, qual é o seu nome completo?"
+            return f"Olá! Para começar, qual é o seu nome completo?{quota_notice}"
         elif not lead_data.get("area_of_law"):
             name = lead_data.get("name", "").split()[0]  # First name only
-            return f"Obrigado, {name}! Em qual área jurídica você precisa de ajuda?\n\n• Penal\n• Civil\n• Trabalhista\n• Família\n• Empresarial"
+            return f"Obrigado, {name}! Em qual área jurídica você precisa de ajuda?\n\n• Penal\n• Civil\n• Trabalhista\n• Família\n• Empresarial{quota_notice}"
         elif not lead_data.get("situation"):
-            return "Entendi. Agora, pode descrever brevemente a sua situação ou problema jurídico?"
+            return f"Entendi. Agora, pode descrever brevemente a sua situação ou problema jurídico?{quota_notice}"
         else:
             # All basic info collected
             name = lead_data.get("name", "").split()[0]
-            return f"Obrigado pelas informações, {name}! Nossa equipe especializada analisará seu caso e entrará em contato em breve. Há mais alguma coisa que gostaria de mencionar?"
+            return f"Obrigado pelas informações, {name}! Nossa equipe especializada analisará seu caso e entrará em contato em breve. Há mais alguma coisa que gostaria de mencionar?{quota_notice}"
 
     async def handle_phone_number_submission(
         self,

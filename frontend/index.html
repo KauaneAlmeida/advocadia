@@ -237,7 +237,14 @@
         
         // Handle different response types
         const botMessage = data.response || data.question || data.reply || "🤔 O bot ficou em silêncio...";
-        addMessage(botMessage, 'bot');
+        
+        // Add status indicator if using fallback
+        let displayMessage = botMessage;
+        if (data.response_type === 'fallback_intelligent' || !data.gemini_available) {
+          displayMessage = `${botMessage}\n\n💡 Modo básico ativo - nossa IA voltará em breve!`;
+        }
+        
+        addMessage(displayMessage, 'bot');
         
         // Check if we need to collect phone number
         if (data.collecting_phone || (data.flow_completed && !data.phone_collected)) {
