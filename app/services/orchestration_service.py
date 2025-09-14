@@ -26,6 +26,8 @@ class IntelligentHybridOrchestrator:
         self.gemini_available = True  # Default to True, will be updated based on actual status
         self.gemini_timeout = 15.0  # 15 second timeout for Gemini calls
         self.law_firm_number = "+5511918368812"  # Internal notification number
+        self.firebase_flow_cache = None  # Cache for Firebase flow
+        self.cache_timestamp = None  # Cache timestamp
         
     async def get_gemini_health_status(self) -> Dict[str, Any]:
         """
@@ -182,48 +184,6 @@ class IntelligentHybridOrchestrator:
         clean_message = ''.join(filter(str.isdigit, message))
         return len(clean_message) >= 10 and len(clean_message) <= 13
 
-    def _validate_and_normalize_answer(self, answer: str, step_id: int) -> str:
-        """Validate and normalize answers for specific steps."""
-        answer = answer.strip()
-        
-        # Step 2 is typically area of law - normalize common variations
-        if step_id == 2:
-            area_map = {
-                "penal": "Penal",
-                "criminal": "Penal",
-                "civil": "Civil",
-                "trabalhista": "Trabalhista",
-                "trabalho": "Trabalhista",
-                "família": "Família",
-                "familia": "Família",
-                "divórcio": "Família",
-                "divorcio": "Família",
-                "empresarial": "Empresarial",
-                "empresa": "Empresarial",
-                "comercial": "Empresarial"
-            }
-            
-            for keyword, normalized in area_map.items():
-                if keyword in answer.lower():
-                    return normalized
-        
-        return answer
-
-    def _should_advance_step(self, answer: str, step_id: int) -> bool:
-        """Determine if answer is sufficient to advance to next step."""
-        answer = answer.strip()
-        
-        # Reject very short or obviously unrelated answers
-        if len(answer) < 2:
-            return False
-            
-        # For name step, require at least two words
-        if step_id == 1:
-            return len(answer.split()) >= 2
-            
-        # For other steps, require minimum length
-        return len(answer) >= 3
-
     async def _attempt_gemini_response(
         self, 
         message: str, 
@@ -310,93 +270,225 @@ class IntelligentHybridOrchestrator:
         await save_user_session(session_id, session_data)
         logger.warning(f"🚫 Gemini marked unavailable for session {session_id}: {reason}")
 
+    async def _get_firebase_flow(self) -> Dict[str, Any]:
+        """Get Firebase conversation flow with caching."""
+        try:
+            # Cache for 5 minutes
+            if (self.firebase_flow_cache is None or 
+                self.cache_timestamp is None or
+                (datetime.now(timezone.utc) - self.cache_timestamp).seconds > 300):
+                
+                self.firebase_flow_cache = await get_conversation_flow()
+                self.cache_timestamp = datetime.now(timezone.utc)
+                logger.info("📋 Firebase conversation flow loaded and cached")
+            
+            return self.firebase_flow_cache
+        except Exception as e:
+            logger.error(f"❌ Error loading Firebase flow: {str(e)}")
+            # Return default flow if Firebase fails
+            return {
+                "steps": [
+                    {"id": 1, "question": "Qual é o seu nome completo?"},
+                    {"id": 2, "question": "Em qual área do direito você precisa de ajuda?"},
+                    {"id": 3, "question": "Descreva brevemente sua situação."},
+                    {"id": 4, "question": "Gostaria de agendar uma consulta?"}
+                ],
+                "completion_message": "Obrigado! Suas informações foram registradas."
+            }
+
     async def _get_fallback_response(
         self, 
         session_data: Dict[str, Any], 
         message: str
     ) -> str:
         """
-        Handle fallback conversation flow using Firestore conversation flow.
-        This is a deterministic state machine that never skips steps.
+        STRICT Firebase fallback: Sequential question flow, no randomization.
+        Enforces exact order: Step 1 → Step 2 → Step 3 → Step 4 → Phone Collection
         """
         try:
             session_id = session_data["session_id"]
-            logger.info(f"⚡ Activating Firebase fallback for session {session_id}")
+            logger.info(f"⚡ STRICT Firebase fallback activated for session {session_id}")
             
-            # Get conversation flow from Firestore
-            flow = await get_conversation_flow()
+            # Get Firebase conversation flow
+            flow = await self._get_firebase_flow()
             steps = flow.get("steps", [])
             
             if not steps:
-                logger.error("❌ No steps found in conversation flow")
-                return "Desculpe, ocorreu um erro interno. Nossa equipe foi notificada."
+                logger.error("❌ No steps found in Firebase flow")
+                return "Qual é o seu nome completo?"  # Fallback to step 1
             
-            # Initialize fallback_step if not set
+            # Sort steps by ID to ensure correct order
+            steps = sorted(steps, key=lambda x: x.get("id", 0))
+            
+            # Initialize fallback_step if not set - ALWAYS start at step 1
             if session_data.get("fallback_step") is None:
-                session_data["fallback_step"] = steps[0]["id"]
+                session_data["fallback_step"] = 1  # Always start at step 1
+                session_data["lead_data"] = {}  # Initialize lead data
                 await save_user_session(session_id, session_data)
-                logger.info(f"🚀 Initialized fallback at step {steps[0]['id']} for session {session_id}")
+                logger.info(f"🚀 STRICT fallback initialized at step 1 for session {session_id}")
+                
+                # Return first question immediately
+                first_step = next((s for s in steps if s["id"] == 1), None)
+                if first_step:
+                    return first_step["question"]
+                else:
+                    return "Qual é o seu nome completo?"
             
             current_step_id = session_data["fallback_step"]
             lead_data = session_data.get("lead_data", {})
             
-            # Find current step
+            # Find current step in sorted steps
             current_step = next((s for s in steps if s["id"] == current_step_id), None)
             if not current_step:
-                logger.error(f"❌ Step {current_step_id} not found in flow")
-                return "Desculpe, ocorreu um erro interno. Nossa equipe foi notificada."
+                logger.error(f"❌ Step {current_step_id} not found, resetting to step 1")
+                session_data["fallback_step"] = 1
+                await save_user_session(session_id, session_data)
+                first_step = next((s for s in steps if s["id"] == 1), None)
+                return first_step["question"] if first_step else "Qual é o seu nome completo?"
             
-            # If we have a message and haven't stored answer for current step yet
+            # Process user's answer if provided
             step_key = f"step_{current_step_id}"
-            if message and message.strip() and step_key not in lead_data:
+            
+            # If user provided an answer and we haven't stored it yet
+            if message and message.strip():
+                # Check if we already have an answer for this step
+                if step_key in lead_data:
+                    # Answer already stored, move to next step logic
+                    logger.info(f"📝 Answer already stored for step {current_step_id}, checking next step")
+                else:
+                    # Validate and store the answer
+                    normalized_answer = self._validate_and_normalize_answer(message, current_step_id)
+                    
+                    if not self._should_advance_step(normalized_answer, current_step_id):
+                        # Re-prompt same step with validation message
+                        logger.info(f"🔄 Invalid answer for step {current_step_id}, re-prompting")
+                        validation_msg = self._get_validation_message(current_step_id)
+                        return f"{validation_msg}\n\n{current_step['question']}"
+                    
+                    # Store the valid answer
+                    lead_data[step_key] = normalized_answer
+                    session_data["lead_data"] = lead_data
+                    await save_user_session(session_id, session_data)
+                    
+                    logger.info(f"💾 Stored answer for step {current_step_id}: {normalized_answer[:50]}...")
                 
-                # Validate answer
-                normalized_answer = self._validate_and_normalize_answer(message, current_step_id)
-                
-                if not self._should_advance_step(normalized_answer, current_step_id):
-                    # Re-prompt same step
-                    logger.info(f"🔄 Re-prompting step {current_step_id} - insufficient answer")
-                    return current_step["question"]
-                
-                # Store the answer
-                lead_data[step_key] = normalized_answer
-                session_data["lead_data"] = lead_data
-                
-                logger.info(f"💾 Stored answer for step {current_step_id}: {normalized_answer[:50]}...")
-                
-                # Find next step
-                next_step = None
-                for i, step in enumerate(steps):
-                    if step["id"] == current_step_id and i + 1 < len(steps):
-                        next_step = steps[i + 1]
-                        break
+                # Find next step in sequence
+                next_step_id = current_step_id + 1
+                next_step = next((s for s in steps if s["id"] == next_step_id), None)
                 
                 if next_step:
                     # Advance to next step
-                    session_data["fallback_step"] = next_step["id"]
+                    session_data["fallback_step"] = next_step_id
                     await save_user_session(session_id, session_data)
-                    logger.info(f"➡️ Advanced to step {next_step['id']} for session {session_id}")
+                    logger.info(f"➡️ Advanced to step {next_step_id} for session {session_id}")
                     return next_step["question"]
                 else:
                     # All steps completed - mark as completed and ask for phone
                     session_data["fallback_completed"] = True
                     await save_user_session(session_id, session_data)
-                    logger.info(f"✅ Fallback flow completed for session {session_id}")
+                    logger.info(f"✅ Firebase fallback flow completed for session {session_id}")
                     return "Obrigado pelas informações! Para finalizar, preciso do seu número de WhatsApp com DDD (exemplo: 11999999999):"
             
-            # If fallback is completed but no phone yet
-            elif session_data.get("fallback_completed") and not session_data.get("phone_submitted"):
-                if message and self._is_phone_number(message):
-                    return await self._handle_phone_collection(message, session_id, session_data)
-                else:
-                    return "Por favor, informe seu número de WhatsApp com DDD para continuarmos o atendimento."
-            
-            # Return current step question
+            # If no message provided or we're just starting, return current question
             return current_step["question"]
             
         except Exception as e:
-            logger.error(f"❌ Error in fallback system: {str(e)}")
-            return "Como posso ajudá-lo com questões jurídicas hoje?"
+            logger.error(f"❌ Error in STRICT Firebase fallback: {str(e)}")
+            # Always fallback to step 1 on error
+            return "Qual é o seu nome completo?"
+
+    def _get_validation_message(self, step_id: int) -> str:
+        """Get validation message for specific step."""
+        validation_messages = {
+            1: "Por favor, informe seu nome completo (nome e sobrenome).",
+            2: "Por favor, escolha uma das áreas: Penal, Civil, Trabalhista, Família ou Empresarial.",
+            3: "Por favor, descreva sua situação com mais detalhes (mínimo 3 caracteres).",
+            4: "Por favor, responda com 'Sim' ou 'Não'."
+        }
+        return validation_messages.get(step_id, "Por favor, forneça uma resposta válida.")
+
+    def _validate_and_normalize_answer(self, answer: str, step_id: int) -> str:
+        """Validate and normalize answers for specific steps."""
+        answer = answer.strip()
+        
+        # Step 1: Name validation
+        if step_id == 1:
+            return answer  # Accept any non-empty name
+        
+        # Step 2: Area of law - normalize common variations
+        elif step_id == 2:
+            area_map = {
+                "penal": "Penal",
+                "criminal": "Penal", 
+                "crime": "Penal",
+                "civil": "Civil",
+                "civel": "Civil",
+                "trabalhista": "Trabalhista",
+                "trabalho": "Trabalhista",
+                "trabalhador": "Trabalhista",
+                "família": "Família",
+                "familia": "Família",
+                "divórcio": "Família",
+                "divorcio": "Família",
+                "casamento": "Família",
+                "empresarial": "Empresarial",
+                "empresa": "Empresarial",
+                "comercial": "Empresarial",
+                "negócio": "Empresarial",
+                "negocio": "Empresarial"
+            }
+            
+            answer_lower = answer.lower()
+            for keyword, normalized in area_map.items():
+                if keyword in answer_lower:
+                    return normalized
+            
+            # If no match found, return original but capitalized
+            return answer.title()
+        
+        # Step 3: Situation description
+        elif step_id == 3:
+            return answer  # Accept any description
+        
+        # Step 4: Meeting preference
+        elif step_id == 4:
+            answer_lower = answer.lower()
+            if any(word in answer_lower for word in ["sim", "yes", "quero", "gostaria", "aceito", "ok", "pode", "claro"]):
+                return "Sim"
+            elif any(word in answer_lower for word in ["não", "nao", "no", "nope", "não quero", "nao quero"]):
+                return "Não"
+            else:
+                return answer  # Return original if unclear
+        
+        return answer
+
+    def _should_advance_step(self, answer: str, step_id: int) -> bool:
+        """Determine if answer is sufficient to advance to next step."""
+        answer = answer.strip()
+        
+        # Reject empty answers
+        if len(answer) < 1:
+            return False
+            
+        # Step 1: Name - require at least 2 words (first and last name)
+        if step_id == 1:
+            words = answer.split()
+            return len(words) >= 2 and all(len(word) >= 2 for word in words)
+            
+        # Step 2: Area - require at least 3 characters
+        elif step_id == 2:
+            return len(answer) >= 3
+            
+        # Step 3: Situation - require at least 5 characters for meaningful description
+        elif step_id == 3:
+            return len(answer) >= 5
+            
+        # Step 4: Meeting preference - accept any answer
+        elif step_id == 4:
+            return len(answer) >= 1
+        
+        # Default: require minimum length
+        return len(answer) >= 2
 
     async def _handle_phone_collection(
         self, 
@@ -444,10 +536,10 @@ class IntelligentHybridOrchestrator:
             answers = []
             
             # Get conversation flow to map step IDs to answers
-            flow = await get_conversation_flow()
+            flow = await self._get_firebase_flow()
             steps = flow.get("steps", [])
             
-            for step in steps:
+            for step in sorted(steps, key=lambda x: x.get("id", 0)):
                 step_key = f"step_{step['id']}"
                 answer = lead_data.get(step_key, "")
                 if answer:
@@ -515,7 +607,7 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
                 whatsapp_success = False
 
             # Get completion message from flow or use default
-            flow = await get_conversation_flow()
+            flow = await self._get_firebase_flow()
             completion_message = flow.get("completion_message", 
                 "Perfeito! Suas informações foram registradas com sucesso. Nossa equipe entrará em contato em breve.")
 
@@ -540,7 +632,7 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
         platform: str = "web"
     ) -> Dict[str, Any]:
         """
-        Main message processing with AI-first approach and Firebase fallback.
+        Main message processing with AI-first approach and STRICT Firebase fallback.
         """
         try:
             logger.info(f"🎯 Processing message - Session: {session_id}, Platform: {platform}")
@@ -583,8 +675,8 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
                     "message_count": session_data.get("message_count", 1)
                 }
             
-            # Gemini failed - use Firebase fallback
-            logger.info(f"⚡ Using Firebase fallback for session {session_id}")
+            # Gemini failed - use STRICT Firebase fallback
+            logger.info(f"⚡ Using STRICT Firebase fallback for session {session_id}")
             fallback_response = await self._get_fallback_response(session_data, message)
 
             # Update session
