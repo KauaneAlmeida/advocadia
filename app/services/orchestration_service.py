@@ -372,21 +372,17 @@ class IntelligentHybridOrchestrator:
                 session_data["fallback_step"] = 1  # Always start at step 1
                 session_data["lead_data"] = {}  # Initialize lead data
                 session_data["fallback_completed"] = False  # Ensure not completed
-                session_data["fallback_intro_sent"] = False  # Track if intro message was sent
                 await save_user_session(session_id, session_data)
                 logger.info(f"🚀 STRICT schema fallback initialized at step 1 for session {session_id}")
                 
-                # Send fallback intro message first, then first question
-                fallback_intro = flow.get("fallback_intro_message", 
-                    "Just to make sure we captured your information correctly, let's go over it again from the beginning, okay?")
-                
+                # Return first question directly
                 first_step = next((s for s in steps if s["id"] == 1), None)
                 if first_step:
                     question = self._interpolate_message(first_step["question"], session_data.get("lead_data", {}))
-                    logger.info(f"📝 Returning fallback intro + step 1 question")
-                    return f"{fallback_intro}\n\n{question}"
+                    logger.info(f"📝 Returning step 1 question")
+                    return question
                 else:
-                    return f"{fallback_intro}\n\nQual é o seu nome completo?"
+                    return "Qual é o seu nome completo?"
             
             current_step_id = session_data["fallback_step"]
             lead_data = session_data.get("lead_data", {})
