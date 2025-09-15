@@ -1,4 +1,6 @@
 import logging
+import json
+import os
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from app.services.firebase_service import (
@@ -27,7 +29,7 @@ class IntelligentHybridOrchestrator:
         self.gemini_available = True  # Default to True, will be updated based on actual status
         self.gemini_timeout = 15.0  # 15 second timeout for Gemini calls
         self.law_firm_number = "+5511918368812"  # Internal notification number
-        self.firebase_flow_cache = None  # Cache for Firebase flow
+        self.schema_flow_cache = None  # Cache for schema-based flow
         self.cache_timestamp = None  # Cache timestamp
         
     async def get_gemini_health_status(self) -> Dict[str, Any]:
@@ -276,30 +278,69 @@ class IntelligentHybridOrchestrator:
         await save_user_session(session_id, session_data)
         logger.warning(f"🚫 Gemini marked unavailable for session {session_id}: {reason}")
 
-    async def _get_firebase_flow(self) -> Dict[str, Any]:
-        """Get Firebase conversation flow with caching."""
+    async def _get_schema_flow(self) -> Dict[str, Any]:
+        """Get schema-based conversation flow with caching."""
         try:
             # Cache for 5 minutes
-            if (self.firebase_flow_cache is None or 
+            if (self.schema_flow_cache is None or 
                 self.cache_timestamp is None or
                 (datetime.now(timezone.utc) - self.cache_timestamp).seconds > 300):
                 
-                self.firebase_flow_cache = await get_conversation_flow()
+                # Load from ai_schema.json first
+                schema_path = "ai_schema.json"
+                if os.path.exists(schema_path):
+                    with open(schema_path, "r", encoding="utf-8") as f:
+                        schema_data = json.load(f)
+                        fallback_flow = schema_data.get("fallback_flow", {})
+                        
+                        if fallback_flow.get("enabled", False):
+                            self.schema_flow_cache = fallback_flow
+                            self.cache_timestamp = datetime.now(timezone.utc)
+                            logger.info("📋 Schema-based conversation flow loaded from ai_schema.json")
+                            return self.schema_flow_cache
+                
+                # Fallback to Firebase if schema not available
+                firebase_flow = await get_conversation_flow()
+                # Convert Firebase format to schema format for compatibility
+                self.schema_flow_cache = {
+                    "enabled": True,
+                    "sequential": True,
+                    "steps": [
+                        {
+                            "id": step.get("id", idx),
+                            "field": f"step_{step.get('id', idx)}",
+                            "question": step.get("question", ""),
+                            "validation": {"min_length": 1, "required": True}
+                        }
+                        for idx, step in enumerate(firebase_flow.get("steps", []), 1)
+                    ],
+                    "completion_message": firebase_flow.get("completion_message", "Obrigado! Suas informações foram registradas."),
+                    "whatsapp_messages": {
+                        "welcome_message": "Olá {user_name}! Recebemos sua solicitação e nossa equipe entrará em contato.",
+                        "case_summary": "📄 Resumo: Nome: {user_name}, Área: {area}, Situação: {situation}"
+                    }
+                }
                 self.cache_timestamp = datetime.now(timezone.utc)
-                logger.info("📋 Firebase conversation flow loaded and cached")
+                logger.info("📋 Fallback to Firebase conversation flow (converted to schema format)")
             
-            return self.firebase_flow_cache
+            return self.schema_flow_cache
         except Exception as e:
-            logger.error(f"❌ Error loading Firebase flow: {str(e)}")
-            # Return default flow if Firebase fails
+            logger.error(f"❌ Error loading schema flow: {str(e)}")
+            # Return default schema flow if everything fails
             return {
+                "enabled": True,
+                "sequential": True,
                 "steps": [
-                    {"id": 1, "question": "Qual é o seu nome completo?"},
-                    {"id": 2, "question": "Em qual área do direito você precisa de ajuda?"},
-                    {"id": 3, "question": "Descreva brevemente sua situação."},
-                    {"id": 4, "question": "Gostaria de agendar uma consulta?"}
+                    {"id": 1, "field": "name", "question": "Qual é o seu nome completo?", "validation": {"min_length": 2}},
+                    {"id": 2, "field": "area_of_law", "question": "Em qual área do direito você precisa de ajuda?", "validation": {"min_length": 3}},
+                    {"id": 3, "field": "situation", "question": "Descreva brevemente sua situação.", "validation": {"min_length": 5}},
+                    {"id": 4, "field": "phone_request", "question": "Preciso do seu número de WhatsApp:", "validation": {"min_length": 10}}
                 ],
-                "completion_message": "Obrigado! Suas informações foram registradas."
+                "completion_message": "Obrigado! Suas informações foram registradas.",
+                "whatsapp_messages": {
+                    "welcome_message": "Olá! Recebemos sua solicitação.",
+                    "case_summary": "Resumo: {user_name}, {area}, {situation}"
+                }
             }
 
     async def _get_fallback_response(
@@ -308,19 +349,19 @@ class IntelligentHybridOrchestrator:
         message: str
     ) -> str:
         """
-        STRICT Firebase fallback: Sequential question flow, no randomization.
+        STRICT Schema-based fallback: Sequential question flow from ai_schema.json.
         Enforces exact order: Step 1 → Step 2 → Step 3 → Step 4 → Phone Collection
         """
         try:
             session_id = session_data["session_id"]
-            logger.info(f"⚡ STRICT Firebase fallback activated for session {session_id}")
+            logger.info(f"⚡ STRICT Schema-based fallback activated for session {session_id}")
             
-            # Get Firebase conversation flow
-            flow = await self._get_firebase_flow()
+            # Get schema-based conversation flow
+            flow = await self._get_schema_flow()
             steps = flow.get("steps", [])
             
             if not steps:
-                logger.error("❌ No steps found in Firebase flow")
+                logger.error("❌ No steps found in schema flow")
                 return "Qual é o seu nome completo?"  # Fallback to step 1
             
             # Sort steps by ID to ensure correct order
@@ -332,13 +373,14 @@ class IntelligentHybridOrchestrator:
                 session_data["lead_data"] = {}  # Initialize lead data
                 session_data["fallback_completed"] = False  # Ensure not completed
                 await save_user_session(session_id, session_data)
-                logger.info(f"🚀 STRICT fallback initialized at step 1 for session {session_id}")
+                logger.info(f"🚀 STRICT schema fallback initialized at step 1 for session {session_id}")
                 
                 # Return first question immediately - DON'T process message on first init
                 first_step = next((s for s in steps if s["id"] == 1), None)
                 if first_step:
-                    logger.info(f"📝 Returning step 1 question: {first_step['question'][:50]}...")
-                    return first_step["question"]
+                    question = self._interpolate_message(first_step["question"], session_data.get("lead_data", {}))
+                    logger.info(f"📝 Returning step 1 question: {question[:50]}...")
+                    return question
                 else:
                     return "Qual é o seu nome completo?"
             
@@ -356,10 +398,12 @@ class IntelligentHybridOrchestrator:
                 session_data["fallback_completed"] = False
                 await save_user_session(session_id, session_data)
                 first_step = next((s for s in steps if s["id"] == 1), None)
-                return first_step["question"] if first_step else "Qual é o seu nome completo?"
+                if first_step:
+                    return self._interpolate_message(first_step["question"], {})
+                return "Qual é o seu nome completo?"
             
             # Process user's answer if provided and not empty
-            step_key = f"step_{current_step_id}"
+            step_key = current_step.get("field", f"step_{current_step_id}")
             
             # If user provided a meaningful answer
             if message and message.strip() and len(message.strip()) > 0:
@@ -370,13 +414,14 @@ class IntelligentHybridOrchestrator:
                     # Don't re-process, just move to next step
                 else:
                     # Validate and store the answer
-                    normalized_answer = self._validate_and_normalize_answer(message, current_step_id)
+                    normalized_answer = self._validate_and_normalize_answer_schema(message, current_step)
                     
-                    if not self._should_advance_step(normalized_answer, current_step_id):
+                    if not self._should_advance_step_schema(normalized_answer, current_step):
                         # Re-prompt same step with validation message
                         logger.info(f"🔄 Invalid answer '{normalized_answer[:30]}...' for step {current_step_id}, re-prompting")
-                        validation_msg = self._get_validation_message(current_step_id)
-                        return f"{validation_msg}\n\n{current_step['question']}"
+                        validation_msg = current_step.get("error_message", "Por favor, forneça uma resposta válida.")
+                        question = self._interpolate_message(current_step["question"], lead_data)
+                        return f"{validation_msg}\n\n{question}"
                     
                     # Store the valid answer
                     lead_data[step_key] = normalized_answer
@@ -393,117 +438,86 @@ class IntelligentHybridOrchestrator:
                     session_data["fallback_step"] = next_step_id
                     await save_user_session(session_id, session_data)
                     logger.info(f"➡️ Advanced to step {next_step_id} for session {session_id}")
-                    return next_step["question"]
+                    return self._interpolate_message(next_step["question"], lead_data)
                 else:
                     # All steps completed - mark as completed and ask for phone
                     session_data["fallback_completed"] = True
                     await save_user_session(session_id, session_data)
-                    logger.info(f"✅ Firebase fallback flow completed for session {session_id}")
+                    logger.info(f"✅ Schema fallback flow completed for session {session_id}")
                     return "Obrigado pelas informações! Para finalizar, preciso do seu número de WhatsApp com DDD (exemplo: 11999999999):"
             else:
                 # No meaningful message provided, return current question
                 logger.info(f"📝 No meaningful message provided, returning current step {current_step_id} question")
-                return current_step["question"]
+                return self._interpolate_message(current_step["question"], lead_data)
             
             # Fallback: return current question
             logger.info(f"📝 Fallback: returning current step {current_step_id} question")
-            return current_step["question"]
+            return self._interpolate_message(current_step["question"], lead_data)
             
         except Exception as e:
-            logger.error(f"❌ Error in STRICT Firebase fallback: {str(e)}")
+            logger.error(f"❌ Error in STRICT schema fallback: {str(e)}")
             # Always fallback to step 1 on error
             return "Qual é o seu nome completo?"
 
-    def _get_validation_message(self, step_id: int) -> str:
-        """Get validation message for specific step."""
-        validation_messages = {
-            1: "Por favor, informe seu nome completo (nome e sobrenome).",
-            2: "Por favor, escolha uma das áreas: Penal, Civil, Trabalhista, Família ou Empresarial.",
-            3: "Por favor, descreva sua situação com mais detalhes (mínimo 3 caracteres).",
-            4: "Por favor, responda com 'Sim' ou 'Não'."
-        }
-        return validation_messages.get(step_id, "Por favor, forneça uma resposta válida.")
+    def _interpolate_message(self, message: str, lead_data: Dict[str, Any]) -> str:
+        """Interpolate variables in message template."""
+        try:
+            # Map common field names to user-friendly variables
+            interpolation_data = {
+                "user_name": lead_data.get("name", lead_data.get("step_1", "")),
+                "area": lead_data.get("area_of_law", lead_data.get("step_2", "")),
+                "situation": lead_data.get("situation", lead_data.get("step_3", "")),
+                "phone": lead_data.get("phone", "")
+            }
+            
+            # Only interpolate if we have the required data
+            for key, value in interpolation_data.items():
+                if value and f"{{{key}}}" in message:
+                    message = message.replace(f"{{{key}}}", value)
+            
+            return message
+        except Exception as e:
+            logger.error(f"❌ Error interpolating message: {str(e)}")
+            return message
 
-    def _validate_and_normalize_answer(self, answer: str, step_id: int) -> str:
-        """Validate and normalize answers for specific steps."""
+    def _validate_and_normalize_answer_schema(self, answer: str, step_config: Dict[str, Any]) -> str:
+        """Validate and normalize answers based on schema configuration."""
         answer = answer.strip()
+        step_id = step_config.get("id", 0)
+        validation = step_config.get("validation", {})
         
-        # Step 1: Name validation
-        if step_id == 1:
-            return answer  # Accept any non-empty name
-        
-        # Step 2: Area of law - normalize common variations
-        elif step_id == 2:
-            area_map = {
-                "penal": "Penal",
-                "criminal": "Penal", 
-                "crime": "Penal",
-                "civil": "Civil",
-                "civel": "Civil",
-                "trabalhista": "Trabalhista",
-                "trabalho": "Trabalhista",
-                "trabalhador": "Trabalhista",
-                "família": "Família",
-                "familia": "Família",
-                "divórcio": "Família",
-                "divorcio": "Família",
-                "casamento": "Família",
-                "empresarial": "Empresarial",
-                "empresa": "Empresarial",
-                "comercial": "Empresarial",
-                "negócio": "Empresarial",
-                "negocio": "Empresarial"
-            for keyword, normalized in area_map.items():
+        # Apply normalization map if available
+        normalize_map = validation.get("normalize_map", {})
+        if normalize_map:
+            answer_lower = answer.lower()
+            for keyword, normalized in normalize_map.items():
                 if keyword in answer_lower:
                     return normalized
-            
-            # If no match found, return original but capitalized
+        
+        # Field-specific validation and normalization
+        field_type = validation.get("type", "")
+        
+        elif field_type == "area" or step_id == 2:
             return answer.title()
-        
-        # Step 3: Situation description
-        elif step_id == 3:
+        elif field_type == "description" or step_id == 3:
             return answer  # Accept any description
-        
-        # Step 4: Meeting preference
-        elif step_id == 4:
-            answer_lower = answer.lower()
-            if any(word in answer_lower for word in ["sim", "yes", "quero", "gostaria", "aceito", "ok", "pode", "claro"]):
-                return "Sim"
-            elif any(word in answer_lower for word in ["não", "nao", "no", "nope", "não quero", "nao quero"]):
-                return "Não"
-            else:
-                return answer  # Return original if unclear
+        elif field_type == "phone":
+            # Clean phone number
+            return ''.join(filter(str.isdigit, answer))
         
         return answer
 
-    def _should_advance_step(self, answer: str, step_id: int) -> bool:
-        """Determine if answer is sufficient to advance to next step."""
+    def _should_advance_step_schema(self, answer: str, step_config: Dict[str, Any]) -> bool:
+        """Determine if answer is sufficient to advance to next step based on schema."""
         answer = answer.strip()
+        validation = step_config.get("validation", {})
+        min_length = validation.get("min_length", 1)
+        required = validation.get("required", True)
         
-        # Reject empty answers
-        if not answer or len(answer) < 1:
+        # Check if required and empty
+        if required and (not answer or len(answer) < 1):
             return False
-            
-        # Step 1: Name - require at least 2 words (first and last name)
-        if step_id == 1:
-            words = answer.split()
-            # More lenient: accept any name with at least 2 characters
-            return len(words) >= 1 and len(answer) >= 2
-            
-        # Step 2: Area - require at least 3 characters
-        elif step_id == 2:
-            return len(answer) >= 3
-            
-        # Step 3: Situation - require at least 3 characters for meaningful description
-        elif step_id == 3:
-            return len(answer) >= 3
-            
-        # Step 4: Meeting preference - accept any answer
-        elif step_id == 4:
-            return len(answer) >= 1
         
-        # Default: require minimum length
-
     async def _handle_phone_collection(
         self, 
         phone_message: str, 
@@ -550,11 +564,11 @@ class IntelligentHybridOrchestrator:
             answers = []
             
             # Get conversation flow to map step IDs to answers
-            flow = await self._get_firebase_flow()
+            flow = await self._get_schema_flow()
             steps = flow.get("steps", [])
             
             for step in sorted(steps, key=lambda x: x.get("id", 0)):
-                step_key = f"step_{step['id']}"
+                step_key = step.get("field", f"step_{step['id']}")
                 answer = lead_data.get(step_key, "")
                 if answer:
                     answers.append({"id": step["id"], "answer": answer})
@@ -571,36 +585,34 @@ class IntelligentHybridOrchestrator:
                 logger.error(f"❌ Error saving lead: {str(save_error)}")
 
             # Prepare WhatsApp messages
-            user_name = lead_data.get("step_1", "Cliente")
-            area = lead_data.get("step_2", "não informada")
-            situation = lead_data.get("step_3", "não detalhada")[:100]
-            if len(lead_data.get("step_3", "")) > 100:
+            user_name = lead_data.get("name", lead_data.get("step_1", "Cliente"))
+            area = lead_data.get("area_of_law", lead_data.get("step_2", "não informada"))
+            situation_full = lead_data.get("situation", lead_data.get("step_3", "não detalhada"))
+            situation = situation_full[:150]
+            if len(situation_full) > 150:
                 situation += "..."
 
-            # Welcome message for user
-            welcome_message = f"""Olá {user_name}! 👋
-
-Recebemos sua solicitação através do nosso site.
-
-📝 Área: {area}
-📖 Situação: {situation}
-
-Nossa equipe analisará seu caso e entrará em contato em breve. Podemos continuar nossa conversa aqui no WhatsApp.
-
-Como posso ajudá-lo hoje? 🤝"""
-
-            # Internal notification for law firm
-            notification_message = f"""🔔 *Nova Lead Capturada (Fallback)*
-
-👤 *Cliente:* {user_name}
-📱 *Telefone:* {phone_clean}
-🏛️ *Área:* {area}
-📝 *Situação:* {situation}
-🆔 *Sessão:* {session_id}
-⏰ *Data:* {datetime.now().strftime('%d/%m/%Y às %H:%M')}
-🤖 *Origem:* Fallback Firebase (Gemini indisponível)
-
-_Lead capturada automaticamente pelo sistema de fallback._"""
+            # Get messages from schema
+            whatsapp_messages = flow.get("whatsapp_messages", {})
+            welcome_template = whatsapp_messages.get("welcome_message", 
+                "Olá {user_name}! Recebemos sua solicitação e nossa equipe entrará em contato.")
+            summary_template = whatsapp_messages.get("case_summary",
+                "📄 Resumo: Nome: {user_name}, Área: {area}, Situação: {situation}")
+            
+            # Interpolate variables
+            interpolation_data = {
+                "user_name": user_name,
+                "area": area,
+                "situation": situation,
+                "phone": phone_clean
+            }
+            
+            welcome_message = welcome_template
+            summary_message = summary_template
+            
+            for key, value in interpolation_data.items():
+                welcome_message = welcome_message.replace(f"{{{key}}}", value)
+                summary_message = summary_message.replace(f"{{{key}}}", value)
 
             # Send WhatsApp messages
             whatsapp_success = False
@@ -609,9 +621,18 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
                 await baileys_service.send_whatsapp_message(whatsapp_number, welcome_message)
                 logger.info(f"📤 Welcome message sent to user {phone_formatted}")
                 
-                # Send notification to law firm
+                # Wait a moment then send case summary
+                import asyncio
+                await asyncio.sleep(2)
+                
+                # Send case summary to same conversation
+                await baileys_service.send_whatsapp_message(whatsapp_number, summary_message)
+                logger.info(f"📤 Case summary sent to user conversation")
+                
+                # Optional: Send notification to law firm (separate conversation)
                 law_firm_whatsapp = f"55{self.law_firm_number.replace('+', '').replace('-', '')}@s.whatsapp.net"
-                await baileys_service.send_whatsapp_message(law_firm_whatsapp, notification_message)
+                notification_msg = f"🔔 Nova lead capturada: {user_name} ({area}) - Telefone: {phone_clean}"
+                await baileys_service.send_whatsapp_message(law_firm_whatsapp, notification_msg)
                 logger.info(f"📤 Internal notification sent to {self.law_firm_number}")
                 
                 whatsapp_success = True
@@ -621,9 +642,13 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
                 whatsapp_success = False
 
             # Get completion message from flow or use default
-            flow = await self._get_firebase_flow()
-            completion_message = flow.get("completion_message", 
+            completion_template = flow.get("completion_message", 
                 "Perfeito! Suas informações foram registradas com sucesso. Nossa equipe entrará em contato em breve.")
+            
+            # Interpolate completion message
+            completion_message = completion_template
+            for key, value in interpolation_data.items():
+                completion_message = completion_message.replace(f"{{{key}}}", value)
 
             # Add phone confirmation to completion message
             final_message = f"""Número confirmado: {phone_clean} 📱
@@ -718,6 +743,7 @@ _Lead capturada automaticamente pelo sistema de fallback._"""
                 "gemini_available": False,
                 "fallback_step": session_data.get("fallback_step"),
                 "fallback_completed": session_data.get("fallback_completed", False),
+                "lead_data": session_data.get("lead_data", {}),
                 "message_count": session_data.get("message_count", 1)
             }
 

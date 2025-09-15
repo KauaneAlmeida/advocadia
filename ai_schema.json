@@ -40,5 +40,79 @@
   },
   "version": "2.0",
   "last_updated": "2024-01-15T15:00:00Z",
-  "description": "Configuração do sistema de IA para assistente jurídico com integração LangChain + Gemini e suporte a contexto de intake"
+  "description": "Configuração do sistema de IA para assistente jurídico com integração LangChain + Gemini e suporte a contexto de intake",
+  "fallback_flow": {
+    "description": "Fluxo fixo de perguntas usado quando Gemini AI está indisponível",
+    "enabled": true,
+    "sequential": true,
+    "steps": [
+      {
+        "id": 1,
+        "field": "name",
+        "question": "Oi! Que bom que você está em contato conosco. Para te ajudar, preciso do seu nome completo. Pode me informar?",
+        "validation": {
+          "min_length": 2,
+          "required": true,
+          "type": "name"
+        },
+        "error_message": "Por favor, informe seu nome completo para que possamos te atender adequadamente."
+      },
+      {
+        "id": 2,
+        "field": "area_of_law",
+        "question": "Olá {user_name}, prazer em te conhecer! Em qual área jurídica você precisa de ajuda?\n\n• Penal\n• Civil\n• Trabalhista\n• Família\n• Empresarial",
+        "validation": {
+          "min_length": 3,
+          "required": true,
+          "type": "area",
+          "normalize_map": {
+            "penal": "Penal",
+            "criminal": "Penal",
+            "crime": "Penal",
+            "civil": "Civil",
+            "civel": "Civil",
+            "trabalhista": "Trabalhista",
+            "trabalho": "Trabalhista",
+            "trabalhador": "Trabalhista",
+            "família": "Família",
+            "familia": "Família",
+            "divórcio": "Família",
+            "divorcio": "Família",
+            "casamento": "Família",
+            "empresarial": "Empresarial",
+            "empresa": "Empresarial",
+            "comercial": "Empresarial"
+          }
+        },
+        "error_message": "Por favor, escolha uma das áreas jurídicas: Penal, Civil, Trabalhista, Família ou Empresarial."
+      },
+      {
+        "id": 3,
+        "field": "situation",
+        "question": "Ok {user_name}, entendi que se trata de uma questão em {area}. Você poderia me descrever brevemente o que aconteceu? Assim consigo direcionar melhor sua demanda.",
+        "validation": {
+          "min_length": 5,
+          "required": true,
+          "type": "description"
+        },
+        "error_message": "Por favor, descreva sua situação com um pouco mais de detalhes para que possamos te ajudar melhor."
+      },
+      {
+        "id": 4,
+        "field": "phone_request",
+        "question": "{user_name}, sinto muito que você esteja passando por isso. Para prosseguirmos, preciso do seu número de WhatsApp com DDD para que nosso time jurídico possa entrar em contato e te auxiliar. Você poderia me fornecer?",
+        "validation": {
+          "min_length": 10,
+          "required": true,
+          "type": "phone"
+        },
+        "error_message": "Por favor, digite seu número de WhatsApp no formato com DDD (exemplo: 11999999999)."
+      }
+    ],
+    "completion_message": "Perfeito, {user_name}! Suas informações foram registradas com sucesso. Nossa equipe especializada em {area} analisará seu caso e entrará em contato através do WhatsApp {phone} em breve. Obrigado por escolher nossos serviços jurídicos!",
+    "whatsapp_messages": {
+      "welcome_message": "Olá {user_name}! 👋\n\nRecebemos sua solicitação através do nosso site e estamos aqui para te auxiliar com questões jurídicas.\n\nNossa equipe especializada está pronta para analisar seu caso.\n\nVamos continuar nossa conversa aqui no WhatsApp para sua comodidade. 🤝",
+      "case_summary": "📄 Resumo do caso fornecido pelo cliente:\n\n- 👤 Nome: {user_name}\n- 📌 Área Jurídica: {area}\n- 📝 Situação: {situation}\n\nEssas informações foram coletadas em nosso site e estão vinculadas a este contato."
+    }
+  }
 }
