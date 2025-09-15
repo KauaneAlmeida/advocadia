@@ -27,14 +27,14 @@ router = APIRouter()
 @router.post("/conversation/start", response_model=ConversationResponse)
 async def start_conversation():
     """
-    Start a new intelligent conversation session.
-    Uses AI orchestration instead of rigid Firebase flows.
+    Start a new conversation session for web platform.
+    Uses Firebase flow for structured lead collection.
     """
     try:
         session_id = str(uuid.uuid4())
-        logger.info(f"🚀 Starting new intelligent conversation | session={session_id}")
+        logger.info(f"🚀 Starting new web conversation | session={session_id}")
 
-        # Start with a welcome message via AI
+        # Start with Firebase flow for web platform
         result = await intelligent_orchestrator.process_message(
             "Olá", 
             session_id, 
@@ -44,7 +44,7 @@ async def start_conversation():
         return ConversationResponse(
             session_id=session_id,
             response=result.get("response", "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"),
-            ai_mode=True,
+            ai_mode=False,
             flow_completed=False,
             phone_collected=False
         )
@@ -60,22 +60,22 @@ async def start_conversation():
 @router.post("/conversation/respond", response_model=ConversationResponse)
 async def respond_to_conversation(request: ConversationRequest):
     """
-    Process user response with intelligent AI orchestration.
+    Process user response with Firebase flow for web platform.
     
-    The AI handles everything:
-    - Natural conversation flow
+    The system handles:
+    - Structured conversation flow
     - Lead information collection
-    - Context awareness
-    - Flexible response handling
+    - Sequential question progression
+    - Phone number collection
     """
     try:
         if not request.session_id:
             request.session_id = str(uuid.uuid4())
             logger.info(f"🆕 New session generated: {request.session_id}")
 
-        logger.info(f"📝 Processing intelligent response | session={request.session_id} | msg={request.message[:50]}...")
+        logger.info(f"📝 Processing web response | session={request.session_id} | msg={request.message[:50]}...")
 
-        # Process via Intelligent Orchestrator
+        # Process via Intelligent Orchestrator (web platform)
         result = await intelligent_orchestrator.process_message(
             request.message,
             request.session_id,
@@ -85,9 +85,9 @@ async def respond_to_conversation(request: ConversationRequest):
         return ConversationResponse(
             session_id=request.session_id,
             response=result.get("response", "Como posso ajudá-lo?"),
-            ai_mode=True,
-            flow_completed=True,  # AI manages flow dynamically
-            phone_collected=False,  # Will be handled when needed
+            ai_mode=False,
+            flow_completed=result.get("fallback_completed", False),
+            phone_collected=result.get("phone_submitted", False),
             lead_data=result.get("lead_data", {}),
             message_count=result.get("message_count", 1)
         )
@@ -177,32 +177,30 @@ async def get_ai_config():
 async def get_conversation_flow():
     """
     Get current conversation approach info.
-    Now shows AI-powered approach instead of rigid Firebase flows.
+    Shows platform-specific handling.
     """
     try:
         return {
-            "approach": "ai_intelligent_orchestration",
-            "description": "Conversation managed by AI (LangChain + Gemini) instead of rigid flows",
+            "approach": "platform_specific_handling",
+            "description": "Web uses Firebase flow, WhatsApp uses AI responses",
             "features": [
-                "Natural language processing",
-                "Context-aware responses", 
-                "Flexible lead collection",
-                "Conversation memory",
-                "Brazilian Portuguese responses",
-                "Empathetic and professional tone",
-                "Automatic information extraction",
-                "Smart phone collection"
+                "Platform separation",
+                "Web: Structured Firebase flow",
+                "WhatsApp: AI-powered responses",
+                "No flow repetition",
+                "Single final WhatsApp message",
+                "Manual lawyer handover"
             ],
             "lead_collection": {
-                "method": "natural_extraction",
+                "method": "structured_web_flow",
                 "fields": ["name", "area_of_law", "situation", "consent"],
-                "approach": "AI extracts information naturally from conversation"
+                "approach": "Sequential questions on web, AI responses on WhatsApp"
             },
             "configuration": {
-                "system_prompt": "Configurable via AI_SYSTEM_PROMPT in .env or ai_schema.json",
-                "ai_model": "gemini-1.5-flash",
-                "memory_window": "10 messages per session",
-                "response_style": "Professional, empathetic, Brazilian Portuguese"
+                "web_flow": "Firebase-based sequential questions",
+                "whatsapp_flow": "AI responses only",
+                "final_message": "Single formatted WhatsApp message",
+                "handover": "Manual lawyer takeover after final message"
             }
         }
 
@@ -224,14 +222,16 @@ async def conversation_service_status():
         service_status = await intelligent_orchestrator.get_overall_service_status()
 
         return {
-            "service": "intelligent_conversation_service",
+            "service": "platform_specific_conversation_service",
             "status": service_status["overall_status"],
-            "approach": "ai_powered_orchestration",
+            "approach": "platform_separation",
             "firebase_status": service_status["firebase_status"],
             "ai_status": service_status["ai_status"],
             "features": service_status["features"],
-            "gemini_available": service_status.get("gemini_available", False),
-            "fallback_mode": service_status.get("fallback_mode", True),
+            "platforms": {
+                "web": "Firebase structured flow",
+                "whatsapp": "AI responses only"
+            },
             "endpoints": {
                 "start": "/api/v1/conversation/start",
                 "respond": "/api/v1/conversation/respond",
@@ -245,9 +245,9 @@ async def conversation_service_status():
     except Exception as e:
         logger.error(f"❌ Error getting service status: {str(e)}")
         return {
-            "service": "intelligent_conversation_service", 
+            "service": "platform_specific_conversation_service", 
             "status": "error", 
-            "approach": "ai_powered_orchestration",
+            "approach": "platform_separation",
             "firebase_status": {"status": "unknown"},
             "ai_status": {"status": "unknown"},
             "features": {},

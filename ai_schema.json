@@ -120,10 +120,6 @@
         "error_message": "Por favor, digite seu número de WhatsApp no formato com DDD (exemplo: 11999999999)."
       }
     ],
-    "completion_message": "Perfeito, {user_name}! Suas informações foram registradas com sucesso. Nossa equipe especializada em {area} analisará seu caso e entrará em contato através do WhatsApp {phone} em breve. Obrigado por escolher nossos serviços jurídicos!",
-    "whatsapp_messages": {
-      "welcome_message": "Olá {user_name}! 👋\n\nRecebemos sua solicitação através do nosso site e estamos aqui para te auxiliar com questões jurídicas.\n\nNossa equipe especializada está pronta para analisar seu caso.\n\nVamos continuar nossa conversa aqui no WhatsApp para sua comodidade. 🤝",
-      "case_summary": "📄 Resumo do caso fornecido pelo cliente:\n\n- 👤 Nome: {user_name}\n- 📌 Área Jurídica: {area}\n- 📝 Situação: {situation}\n\nEssas informações foram coletadas em nosso site e estão vinculadas a este contato."
-    }
+    "completion_message": "Perfeito, {user_name}! Suas informações foram registradas com sucesso. Nossa equipe especializada em {area} analisará seu caso e entrará em contato através do WhatsApp {phone} em breve. Obrigado por escolher nossos serviços jurídicos!"
   }
 }

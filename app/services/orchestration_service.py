@@ -27,11 +27,11 @@ def ensure_utc(dt: datetime) -> datetime:
 
 class IntelligentHybridOrchestrator:
     def __init__(self):
-        self.gemini_available = True  # Default to True, will be updated based on actual status
-        self.gemini_timeout = 15.0  # 15 second timeout for Gemini calls
-        self.law_firm_number = "+5511918368812"  # Internal notification number
-        self.schema_flow_cache = None  # Cache for schema-based flow
-        self.cache_timestamp = None  # Cache timestamp
+        self.gemini_available = True
+        self.gemini_timeout = 15.0
+        self.law_firm_number = "+5511918368812"
+        self.schema_flow_cache = None
+        self.cache_timestamp = None
         
     async def get_gemini_health_status(self) -> Dict[str, Any]:
         """
@@ -166,7 +166,7 @@ class IntelligentHybridOrchestrator:
                 "created_at": ensure_utc(datetime.now(timezone.utc)),
                 "lead_data": {},
                 "message_count": 0,
-                "fallback_step": None,  # Will be set to 1 when fallback starts
+                "fallback_step": None,
                 "phone_submitted": False,
                 "gemini_available": True,
                 "last_gemini_check": None,
@@ -191,92 +191,6 @@ class IntelligentHybridOrchestrator:
         """Check if message looks like a Brazilian phone number."""
         clean_message = ''.join(filter(str.isdigit, message))
         return len(clean_message) >= 10 and len(clean_message) <= 13
-
-    async def _attempt_gemini_response(
-        self, 
-        message: str, 
-        session_id: str, 
-        session_data: Dict[str, Any]
-    ) -> Optional[str]:
-        """
-        Attempt to get response from Gemini AI with timeout and error handling.
-        Returns None if Gemini is unavailable or fails.
-        """
-        if not session_data.get("gemini_available", True):
-            logger.info(f"🚫 Gemini marked unavailable for session {session_id}")
-            return None
-
-        try:
-            logger.info(f"🤖 Attempting Gemini AI response for session {session_id}")
-            
-            # Prepare context from collected lead data
-            lead_data = session_data.get("lead_data", {})
-            context = {
-                "platform": session_data.get("platform", "web"),
-                "name": lead_data.get("step_1", "Não informado"),
-                "area_of_law": lead_data.get("step_2", "Não informada"),
-                "situation": lead_data.get("step_3", "Não detalhada")
-            }
-            
-            import asyncio
-            
-            # Call Gemini with timeout
-            gemini_response = await asyncio.wait_for(
-                ai_orchestrator.generate_response(
-                    message,
-                    session_id,
-                    context=context
-                ),
-                timeout=self.gemini_timeout
-            )
-            
-            # Validate response
-            if (gemini_response and 
-                isinstance(gemini_response, str) and 
-                gemini_response.strip() and
-                not self._is_quota_error(gemini_response)):
-                
-                logger.info(f"✅ Valid Gemini response received for session {session_id}")
-                
-                # Mark Gemini as available if it was previously unavailable
-                if not session_data.get("gemini_available", True):
-                    session_data["gemini_available"] = True
-                    session_data["last_gemini_check"] = ensure_utc(datetime.now(timezone.utc))
-                    await save_user_session(session_id, session_data)
-                    logger.info(f"🔄 Gemini restored for session {session_id}")
-                
-                return gemini_response
-            else:
-                logger.warning(f"⚠️ Invalid Gemini response for session {session_id}")
-                return None
-                
-        except asyncio.TimeoutError:
-            logger.error(f"⏰ Gemini timeout for session {session_id}")
-            await self._mark_gemini_unavailable(session_id, session_data, "timeout")
-            return None
-        except Exception as e:
-            error_str = str(e)
-            logger.error(f"❌ Gemini error for session {session_id}: {error_str}")
-            
-            # Check if it's a quota/rate limit error
-            if self._is_quota_error(error_str):
-                await self._mark_gemini_unavailable(session_id, session_data, f"quota: {error_str}")
-            else:
-                await self._mark_gemini_unavailable(session_id, session_data, f"error: {error_str}")
-            
-            return None
-
-    async def _mark_gemini_unavailable(
-        self, 
-        session_id: str, 
-        session_data: Dict[str, Any], 
-        reason: str
-    ):
-        """Mark Gemini as unavailable for this session."""
-        session_data["gemini_available"] = False
-        session_data["last_gemini_check"] = ensure_utc(datetime.now(timezone.utc))
-        await save_user_session(session_id, session_data)
-        logger.warning(f"🚫 Gemini marked unavailable for session {session_id}: {reason}")
 
     async def _get_schema_flow(self) -> Dict[str, Any]:
         """Get schema-based conversation flow with caching."""
@@ -362,12 +276,19 @@ class IntelligentHybridOrchestrator:
         message: str
     ) -> str:
         """
-        STRICT Schema-based fallback: Sequential question flow from ai_schema.json.
-        Enforces exact order: Step 1 → Step 2 → Step 3 → Step 4 → Phone Collection
+        Firebase-based fallback for WEB platform only.
+        Sequential question flow: Step 0 → Step 1 → Step 2 → Step 3 → Step 4 → Phone Collection
         """
         try:
             session_id = session_data["session_id"]
-            logger.info(f"⚡ STRICT Schema-based fallback activated for session {session_id}")
+            platform = session_data.get("platform", "web")
+            
+            # Only run Firebase flow for web platform
+            if platform != "web":
+                logger.info(f"🚫 Firebase flow skipped for platform {platform}")
+                return "Olá! Como posso ajudá-lo?"
+            
+            logger.info(f"⚡ Firebase fallback activated for web session {session_id}")
             
             # Get schema-based conversation flow
             flow = await self._get_schema_flow()
@@ -483,7 +404,7 @@ class IntelligentHybridOrchestrator:
             return self._interpolate_message(current_step.get("question", ""), lead_data)
             
         except Exception as e:
-            logger.error(f"❌ Error in STRICT schema fallback: {str(e)}")
+            logger.error(f"❌ Error in Firebase fallback: {str(e)}")
             # Always fallback to step 1 on error
             return "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"
 
@@ -581,6 +502,7 @@ class IntelligentHybridOrchestrator:
         
         # Default validation - just check minimum length
         return len(answer) >= min_length
+
     async def _handle_phone_collection(
         self, 
         phone_message: str, 
@@ -588,7 +510,7 @@ class IntelligentHybridOrchestrator:
         session_data: Dict[str, Any]
     ) -> str:
         """
-        Handle phone number collection, validation, and WhatsApp integration.
+        Handle phone number collection and send final WhatsApp message.
         """
         try:
             # Clean and validate phone number
@@ -647,7 +569,7 @@ class IntelligentHybridOrchestrator:
             except Exception as save_error:
                 logger.error(f"❌ Error saving lead: {str(save_error)}")
 
-            # Prepare WhatsApp messages
+            # Prepare data for final WhatsApp message
             user_name = lead_data.get("name", lead_data.get("step_1", lead_data.get("step_0", "Cliente")))
             area = lead_data.get("area_of_law", lead_data.get("step_2", "não informada"))
             situation_full = lead_data.get("situation", lead_data.get("step_3", "não detalhada"))
@@ -655,58 +577,28 @@ class IntelligentHybridOrchestrator:
             if len(situation_full) > 150:
                 situation += "..."
 
-            # Get messages from schema
-            whatsapp_messages = flow.get("whatsapp_messages", {})
-            welcome_template = whatsapp_messages.get("welcome_message", 
-                "Olá {user_name}! Recebemos sua solicitação e nossa equipe entrará em contato.")
-            summary_template = whatsapp_messages.get("case_summary",
-                "📄 Resumo: Nome: {user_name}, Área: {area}, Situação: {situation}")
-            
-            # Interpolate variables
-            interpolation_data = {
-                "user_name": user_name,
-                "area": area,
-                "situation": situation,
-                "phone": phone_clean
-            }
-            
-            welcome_message = welcome_template
-            summary_message = summary_template
-            
-            for key, value in interpolation_data.items():
-                welcome_message = welcome_message.replace(f"{{{key}}}", value)
-                summary_message = summary_message.replace(f"{{{key}}}", value)
+            # Create the final WhatsApp message with the exact format requested
+            final_whatsapp_message = f"""Olá {user_name}! 👋
 
-            # Send WhatsApp messages - ALWAYS send both welcome_message and case_summary
+Recebemos sua solicitação através do nosso site e estamos aqui para ajudá-lo com questões jurídicas.
+
+Nossa equipe especializada está pronta para analisar seu caso. 
+Vamos continuar nossa conversa aqui no WhatsApp para maior comodidade. 🤝
+
+📄 Resumo do caso enviado pelo cliente:
+
+- 👤 Nome: {user_name}
+- 📌 Área de atuação: {area}
+- 📝 Situação: {situation}
+
+Essas informações foram coletadas na landing page e estão vinculadas a este contato."""
+
+            # Send single final WhatsApp message
             whatsapp_success = False
             try:
-                # Send welcome message to user
-                await baileys_service.send_whatsapp_message(whatsapp_number, welcome_message)
-                logger.info(f"📤 Welcome message sent to user {phone_formatted}")
-                
-                # Wait a moment then send case summary
-                await asyncio.sleep(2)
-                
-                # Send case summary to same conversation
-                await baileys_service.send_whatsapp_message(whatsapp_number, summary_message)
-                logger.info(f"📤 Case summary sent to user conversation")
-                
-                # Send internal notification to law firm number
-                internal_message = f"""🔔 *Nova Lead Capturada via Fallback*
-
-👤 *Cliente:* {user_name}
-📱 *Telefone:* {phone_clean}
-🆔 *Sessão:* {session_id}
-⏰ *Horário:* {datetime.now(timezone.utc).strftime('%d/%m/%Y às %H:%M')}
-
-📋 *Dados Coletados:*
-• Área Jurídica: {area}
-• Situação: {situation}
-
-_Mensagem enviada automaticamente pelo sistema de fallback._"""
-                
-                await baileys_service.send_whatsapp_message(f"{self.law_firm_number}@s.whatsapp.net", internal_message)
-                logger.info(f"📤 Internal notification sent to law firm")
+                # Send final message to user
+                await baileys_service.send_whatsapp_message(whatsapp_number, final_whatsapp_message)
+                logger.info(f"📤 Final WhatsApp message sent to user {phone_formatted}")
                 
                 whatsapp_success = True
                 
@@ -714,19 +606,10 @@ _Mensagem enviada automaticamente pelo sistema de fallback._"""
                 logger.error(f"❌ Error sending WhatsApp messages: {str(whatsapp_error)}")
                 whatsapp_success = False
 
-            # Get completion message from flow or use default
-            completion_template = flow.get("completion_message", 
-                "Perfeito! Suas informações foram registradas com sucesso. Nossa equipe entrará em contato em breve.")
-            
-            # Interpolate completion message
-            completion_message = completion_template
-            for key, value in interpolation_data.items():
-                completion_message = completion_message.replace(f"{{{key}}}", value)
-
-            # Add phone confirmation to completion message
+            # Return confirmation message for web interface
             final_message = f"""Número confirmado: {phone_clean} 📱
 
-{completion_message}
+Perfeito! Suas informações foram registradas com sucesso. Nossa equipe entrará em contato em breve.
 
 {'✅ Mensagem enviada para seu WhatsApp!' if whatsapp_success else '⚠️ Houve um problema ao enviar a mensagem do WhatsApp, mas suas informações foram salvas.'}"""
 
@@ -744,7 +627,9 @@ _Mensagem enviada automaticamente pelo sistema de fallback._"""
         platform: str = "web"
     ) -> Dict[str, Any]:
         """
-        Main message processing with AI-first approach and STRICT Firebase fallback.
+        Main message processing with platform-specific handling.
+        - Web: Uses Firebase fallback flow
+        - WhatsApp: Uses AI responses only (no Firebase flow repetition)
         """
         try:
             logger.info(f"🎯 Processing message - Session: {session_id}, Platform: {platform}")
@@ -753,8 +638,9 @@ _Mensagem enviada automaticamente pelo sistema de fallback._"""
             session_data = await self._get_or_create_session(session_id, platform, phone_number)
             logger.info(f"📊 Session state - Fallback step: {session_data.get('fallback_step')}, Completed: {session_data.get('fallback_completed')}, Phone submitted: {session_data.get('phone_submitted')}")
 
-            # Check if we're collecting phone number in fallback mode
-            if (session_data.get("fallback_completed") and 
+            # Handle phone collection for web platform only
+            if (platform == "web" and
+                session_data.get("fallback_completed") and 
                 not session_data.get("phone_submitted") and 
                 self._is_phone_number(message)):
                 
@@ -769,56 +655,104 @@ _Mensagem enviada automaticamente pelo sistema de fallback._"""
                     "message_count": session_data.get("message_count", 0) + 1
                 }
 
-            # Try Gemini first (AI-first approach)
-            logger.info(f"🤖 Attempting Gemini AI for session {session_id}")
-            ai_response = await self._attempt_gemini_response(message, session_id, session_data)
+            # Platform-specific handling
+            if platform == "whatsapp":
+                # WhatsApp: Use AI responses only, no Firebase flow
+                logger.info(f"📱 WhatsApp platform - using AI responses only")
+                try:
+                    # Prepare context from any existing lead data
+                    lead_data = session_data.get("lead_data", {})
+                    context = {
+                        "platform": "whatsapp",
+                        "name": lead_data.get("name", lead_data.get("step_1", "Não informado")),
+                        "area_of_law": lead_data.get("area_of_law", lead_data.get("step_2", "Não informada")),
+                        "situation": lead_data.get("situation", lead_data.get("step_3", "Não detalhada"))
+                    }
+                    
+                    # Call AI with timeout
+                    ai_response = await asyncio.wait_for(
+                        ai_orchestrator.generate_response(
+                            message,
+                            session_id,
+                            context=context
+                        ),
+                        timeout=self.gemini_timeout
+                    )
+                    
+                    if ai_response and isinstance(ai_response, str) and ai_response.strip():
+                        session_data["last_message"] = message
+                        session_data["last_response"] = ai_response
+                        session_data["last_updated"] = ensure_utc(datetime.now(timezone.utc))
+                        session_data["message_count"] = session_data.get("message_count", 0) + 1
+                        await save_user_session(session_id, session_data)
+
+                        return {
+                            "response_type": "ai_whatsapp",
+                            "platform": platform,
+                            "session_id": session_id,
+                            "response": ai_response,
+                            "ai_mode": True,
+                            "message_count": session_data.get("message_count", 1)
+                        }
+                    else:
+                        # AI failed, provide simple fallback
+                        fallback_response = "Obrigado pela sua mensagem. Nossa equipe analisará sua solicitação e retornará em breve."
+                        return {
+                            "response_type": "whatsapp_fallback",
+                            "platform": platform,
+                            "session_id": session_id,
+                            "response": fallback_response,
+                            "ai_mode": False,
+                            "message_count": session_data.get("message_count", 0) + 1
+                        }
+                        
+                except Exception as ai_error:
+                    logger.error(f"❌ AI error for WhatsApp: {str(ai_error)}")
+                    fallback_response = "Obrigado pela sua mensagem. Nossa equipe analisará sua solicitação e retornará em breve."
+                    return {
+                        "response_type": "whatsapp_error_fallback",
+                        "platform": platform,
+                        "session_id": session_id,
+                        "response": fallback_response,
+                        "ai_mode": False,
+                        "error": str(ai_error),
+                        "message_count": session_data.get("message_count", 0) + 1
+                    }
             
-            if ai_response:
-                # Gemini succeeded - use AI response
-                logger.info(f"✅ Gemini succeeded, using AI response")
+            elif platform == "web":
+                # Web: Use Firebase fallback flow
+                logger.info(f"🌐 Web platform - using Firebase fallback flow")
+                fallback_response = await self._get_fallback_response(session_data, message)
+                
+                # Update session
                 session_data["last_message"] = message
-                session_data["last_response"] = ai_response
+                session_data["last_response"] = fallback_response
                 session_data["last_updated"] = ensure_utc(datetime.now(timezone.utc))
                 session_data["message_count"] = session_data.get("message_count", 0) + 1
                 await save_user_session(session_id, session_data)
-
+                
                 return {
-                    "response_type": "ai_intelligent",
+                    "response_type": "web_firebase_flow",
                     "platform": platform,
                     "session_id": session_id,
-                    "response": ai_response,
-                    "ai_mode": True,
-                    "gemini_available": True,
+                    "response": fallback_response,
+                    "ai_mode": False,
+                    "fallback_step": session_data.get("fallback_step"),
+                    "fallback_completed": session_data.get("fallback_completed", False),
+                    "lead_data": session_data.get("lead_data", {}),
                     "message_count": session_data.get("message_count", 1)
                 }
-            
-            # Gemini failed - use STRICT Firebase fallback
-            logger.info(f"⚡ Using STRICT Firebase fallback for session {session_id}")
-            logger.info(f"📊 Before fallback - Step: {session_data.get('fallback_step')}, Lead data: {list(session_data.get('lead_data', {}).keys())}")
-            fallback_response = await self._get_fallback_response(session_data, message)
-            logger.info(f"📤 Fallback response generated: '{fallback_response[:100]}...'")
-
-            # Update session
-            session_data["last_message"] = message
-            session_data["last_response"] = fallback_response
-            session_data["last_updated"] = ensure_utc(datetime.now(timezone.utc))
-            session_data["message_count"] = session_data.get("message_count", 0) + 1
-            await save_user_session(session_id, session_data)
-            
-            logger.info(f"📊 After fallback - Step: {session_data.get('fallback_step')}, Completed: {session_data.get('fallback_completed')}")
-
-            return {
-                "response_type": "fallback_firebase",
-                "platform": platform,
-                "session_id": session_id,
-                "response": fallback_response,
-                "ai_mode": False,
-                "gemini_available": False,
-                "fallback_step": session_data.get("fallback_step"),
-                "fallback_completed": session_data.get("fallback_completed", False),
-                "lead_data": session_data.get("lead_data", {}),
-                "message_count": session_data.get("message_count", 1)
-            }
+            else:
+                # Unknown platform - provide generic response
+                logger.warning(f"⚠️ Unknown platform: {platform}")
+                return {
+                    "response_type": "unknown_platform",
+                    "platform": platform,
+                    "session_id": session_id,
+                    "response": "Como posso ajudá-lo?",
+                    "ai_mode": False,
+                    "message_count": session_data.get("message_count", 0) + 1
+                }
 
         except Exception as e:
             logger.error(f"❌ Error in orchestration: {str(e)}")
@@ -868,8 +802,6 @@ _Mensagem enviada automaticamente pelo sistema de fallback._"""
                 "fallback_step": session_data.get("fallback_step"),
                 "fallback_completed": session_data.get("fallback_completed", False),
                 "phone_submitted": session_data.get("phone_submitted", False),
-                "gemini_available": session_data.get("gemini_available", True),
-                "last_gemini_check": session_data.get("last_gemini_check"),
                 "lead_data": session_data.get("lead_data", {}),
                 "message_count": session_data.get("message_count", 0),
                 "created_at": session_data.get("created_at"),

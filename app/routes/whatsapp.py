@@ -28,7 +28,7 @@ router = APIRouter()
 async def whatsapp_webhook(request: Request):
     """
     Webhook endpoint for receiving WhatsApp messages via Baileys.
-    Now processes ALL messages through Intelligent Orchestrator (AI-powered).
+    Processes messages through AI (no Firebase flow repetition).
     """
     try:
         payload = await request.json()
@@ -46,7 +46,7 @@ async def whatsapp_webhook(request: Request):
 
         logger.info(f"🎯 Processing WhatsApp message from {phone_number}: {message_text[:50]}...")
 
-        # Process via Intelligent Orchestrator (AI-powered)
+        # Process via Intelligent Orchestrator (WhatsApp platform - AI only)
         response = await intelligent_orchestrator.process_message(
             message_text,
             session_id,
@@ -54,7 +54,7 @@ async def whatsapp_webhook(request: Request):
             platform="whatsapp"
         )
 
-        # The response will always contain an AI-generated reply
+        # The response contains AI-generated reply (no Firebase flow)
         ai_response = response.get("response", "")
         
         if ai_response:
@@ -68,8 +68,7 @@ async def whatsapp_webhook(request: Request):
                 "message_id": message_id,
                 "session_id": session_id,
                 "response": ai_response,
-                "response_type": response.get("response_type", "ai_intelligent"),
-                "lead_data": response.get("lead_data", {}),
+                "response_type": response.get("response_type", "ai_whatsapp"),
                 "message_count": response.get("message_count", 1)
             }
         else:
