@@ -372,17 +372,21 @@ class IntelligentHybridOrchestrator:
                 session_data["fallback_step"] = 1  # Always start at step 1
                 session_data["lead_data"] = {}  # Initialize lead data
                 session_data["fallback_completed"] = False  # Ensure not completed
+                session_data["fallback_intro_sent"] = False  # Track if intro message was sent
                 await save_user_session(session_id, session_data)
                 logger.info(f"🚀 STRICT schema fallback initialized at step 1 for session {session_id}")
                 
-                # Return first question immediately - DON'T process message on first init
+                # Send fallback intro message first, then first question
+                fallback_intro = flow.get("fallback_intro_message", 
+                    "Just to make sure we captured your information correctly, let's go over it again from the beginning, okay?")
+                
                 first_step = next((s for s in steps if s["id"] == 1), None)
                 if first_step:
                     question = self._interpolate_message(first_step["question"], session_data.get("lead_data", {}))
-                    logger.info(f"📝 Returning step 1 question: {question[:50]}...")
-                    return question
+                    logger.info(f"📝 Returning fallback intro + step 1 question")
+                    return f"{fallback_intro}\n\n{question}"
                 else:
-                    return "Qual é o seu nome completo?"
+                    return f"{fallback_intro}\n\nQual é o seu nome completo?"
             
             current_step_id = session_data["fallback_step"]
             lead_data = session_data.get("lead_data", {})
@@ -661,12 +665,6 @@ class IntelligentHybridOrchestrator:
                 # Send case summary to same conversation
                 await baileys_service.send_whatsapp_message(whatsapp_number, summary_message)
                 logger.info(f"📤 Case summary sent to user conversation")
-                
-                # Optional: Send notification to law firm (separate conversation)
-                law_firm_whatsapp = f"55{self.law_firm_number.replace('+', '').replace('-', '')}@s.whatsapp.net"
-                notification_msg = f"🔔 Nova lead capturada: {user_name} ({area}) - Telefone: {phone_clean}"
-                await baileys_service.send_whatsapp_message(law_firm_whatsapp, notification_msg)
-                logger.info(f"📤 Internal notification sent to {self.law_firm_number}")
                 
                 whatsapp_success = True
                 

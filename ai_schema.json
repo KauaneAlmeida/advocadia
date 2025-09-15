@@ -45,6 +45,7 @@
     "description": "Fluxo fixo de perguntas usado quando Gemini AI está indisponível",
     "enabled": true,
     "sequential": true,
+    "fallback_intro_message": "Just to make sure we captured your information correctly, let's go over it again from the beginning, okay?",
     "steps": [
       {
         "id": 1,
