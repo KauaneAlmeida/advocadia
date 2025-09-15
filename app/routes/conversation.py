@@ -43,7 +43,7 @@ async def start_conversation():
         
         return ConversationResponse(
             session_id=session_id,
-            response=result.get("response", "Olá! Como posso ajudá-lo hoje?"),
+            response=result.get("response", "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"),
             ai_mode=True,
             flow_completed=False,
             phone_collected=False

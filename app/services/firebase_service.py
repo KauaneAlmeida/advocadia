@@ -92,7 +92,8 @@ async def get_conversation_flow() -> Dict[str, Any]:
             logger.info("📝 Criando fluxo de conversa padrão")
             default_flow = {
                 "steps": [
-                    {"id": 1, "question": "Olá! Para começar, qual é o seu nome completo?"},
+                    {"id": 0, "question": "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"},
+                    {"id": 1, "question": "Qual é o seu nome completo?"},
                     {"id": 2, "question": "Em qual área do direito você precisa de ajuda?\n\n• Penal\n• Civil\n• Trabalhista\n• Família\n• Empresarial"},
                     {"id": 3, "question": "Por favor, descreva brevemente sua situação ou problema jurídico."},
                     {"id": 4, "question": "Gostaria de agendar uma consulta com nosso advogado especializado? (Sim ou Não)"},
@@ -124,6 +125,14 @@ async def get_conversation_flow() -> Dict[str, Any]:
                     "id": idx,
                     "question": str(step),
                 })
+
+        # Ensure step 0 exists if not present
+        has_step_0 = any(step.get("id") == 0 for step in normalized_steps)
+        if not has_step_0:
+            normalized_steps.insert(0, {
+                "id": 0,
+                "question": "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"
+            })
 
         flow_data["steps"] = normalized_steps
         

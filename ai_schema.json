@@ -54,7 +54,8 @@
           "type": "confirmation",
           "required": true
         },
-        "error_message": "Pode me confirmar se está tudo certo para revisarmos do começo?"
+        "error_message": "Pode me confirmar se está tudo certo para revisarmos do começo?",
+        "confirmation_responses": ["sim", "ok", "tudo bem", "pode ser", "claro", "yes", "certo", "vamos", "confirmo", "vamos lá", "perfeito", "beleza"]
       },
       {
         "id": 1,

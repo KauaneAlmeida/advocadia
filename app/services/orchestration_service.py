@@ -306,7 +306,13 @@ class IntelligentHybridOrchestrator:
                     "enabled": True,
                     "sequential": True,
                     "steps": [
-                        {"id": 0, "field": "review_intro", "question": "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?", "validation": {"type": "confirmation", "required": True}},
+                        {
+                            "id": 0,
+                            "field": "review_intro", 
+                            "question": "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?",
+                            "validation": {"type": "confirmation", "required": True}
+                        }
+                    ] + [
                         {
                             "id": step.get("id", idx),
                             "field": f"step_{step.get('id', idx)}",
@@ -332,6 +338,12 @@ class IntelligentHybridOrchestrator:
                 "enabled": True,
                 "sequential": True,
                 "steps": [
+                    {
+                        "id": 0,
+                        "field": "review_intro",
+                        "question": "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?",
+                        "validation": {"type": "confirmation", "required": True}
+                    },
                     {"id": 1, "field": "name", "question": "Qual é o seu nome completo?", "validation": {"min_length": 2}},
                     {"id": 2, "field": "area_of_law", "question": "Em qual área do direito você precisa de ajuda?", "validation": {"min_length": 3}},
                     {"id": 3, "field": "situation", "question": "Descreva brevemente sua situação.", "validation": {"min_length": 5}},
@@ -395,13 +407,16 @@ class IntelligentHybridOrchestrator:
             current_step = next((s for s in steps if s["id"] == current_step_id), None)
             if not current_step:
                 logger.error(f"❌ Step {current_step_id} not found in schema steps. Available steps: {[s.get('id') for s in steps]}")
+                # Reset to step 0 and ensure it exists
                 session_data["fallback_step"] = 0
                 session_data["lead_data"] = {}
                 session_data["fallback_completed"] = False
                 await save_user_session(session_id, session_data)
-                first_step = next((s for s in steps if s["id"] == 0), None)
+                
+                # Find step 0 or create default
+                first_step = next((s for s in steps if s.get("id") == 0), None)
                 if first_step:
-                    question = self._interpolate_message(first_step["question"], {})
+                    question = self._interpolate_message(first_step.get("question", ""), {})
                     logger.info(f"📝 Reset to step 0, returning: {question[:50]}...")
                     return question
                 else:
@@ -451,7 +466,7 @@ class IntelligentHybridOrchestrator:
                     session_data["fallback_step"] = next_step_id
                     await save_user_session(session_id, session_data)
                     logger.info(f"➡️ Advanced to step {next_step_id} for session {session_id}")
-                    return self._interpolate_message(next_step["question"], lead_data)
+                    return self._interpolate_message(next_step.get("question", ""), lead_data)
                 else:
                     # All steps completed - mark as completed and ask for phone
                     session_data["fallback_completed"] = True
@@ -461,20 +476,23 @@ class IntelligentHybridOrchestrator:
             else:
                 # No meaningful message provided, return current question
                 logger.info(f"📝 No meaningful message provided, returning current step {current_step_id} question")
-                return self._interpolate_message(current_step["question"], lead_data)
+                return self._interpolate_message(current_step.get("question", ""), lead_data)
             
             # Fallback: return current question
             logger.info(f"📝 Fallback: returning current step {current_step_id} question")
-            return self._interpolate_message(current_step["question"], lead_data)
+            return self._interpolate_message(current_step.get("question", ""), lead_data)
             
         except Exception as e:
             logger.error(f"❌ Error in STRICT schema fallback: {str(e)}")
             # Always fallback to step 1 on error
-            return "Qual é o seu nome completo?"
+            return "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"
 
     def _interpolate_message(self, message: str, lead_data: Dict[str, Any]) -> str:
         """Interpolate variables in message template."""
         try:
+            if not message:
+                return "Como posso ajudá-lo?"
+                
             # Map common field names to user-friendly variables
             interpolation_data = {
                 "user_name": lead_data.get("name", lead_data.get("step_1", "")),
@@ -545,7 +563,7 @@ class IntelligentHybridOrchestrator:
             answer_lower = answer.lower()
             confirmation_responses = ['sim', 'ok', 'tudo bem', 'pode ser', 'claro', 'yes', 'certo', 'vamos', 'confirmo', 'vamos lá', 'perfeito', 'beleza']
             return any(response in answer_lower for response in confirmation_responses)
-        if step_id == 1:  # Name validation
+        elif step_id == 1:  # Name validation
             # Require at least 2 words for full name
             words = answer.split()
             return len(words) >= 2 and all(len(word) >= 2 for word in words)
