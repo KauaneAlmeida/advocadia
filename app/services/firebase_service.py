@@ -7,6 +7,7 @@ Agora ajustado para bater com o formato existente no Firestore (id + question si
 
 import os
 import logging
+import json
 from typing import Dict, Any, Optional
 from datetime import datetime
 import firebase_admin

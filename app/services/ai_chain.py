@@ -8,6 +8,7 @@ conversas inteligentes, memória e geração de respostas contextuais.
 import os
 import logging
 import json
+import asyncio
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from langchain.memory import ConversationBufferWindowMemory
@@ -190,7 +191,6 @@ Você **não agenda consultas**, apenas coleta as informações e organiza para 
                     contextual_message = f"[Contexto: {'; '.join(context_info)}] {message}"
 
             # Add timeout and better error handling
-            import asyncio
             
             try:
                 response = await asyncio.wait_for(

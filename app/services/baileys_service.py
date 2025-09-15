@@ -8,6 +8,7 @@ It handles message sending, status checking, and connection management.
 import requests
 import logging
 import asyncio
+import json
 from typing import Dict, Any, Optional
 import os
 
@@ -80,7 +81,6 @@ class BaileysWhatsAppService:
             
             logger.info(f"📤 Sending WhatsApp message to {phone_number[:15]}...")
             
-            import asyncio
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
@@ -121,7 +121,6 @@ class BaileysWhatsAppService:
             Dict[str, Any]: Status information
         """
         try:
-            import asyncio
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
@@ -171,7 +170,6 @@ class BaileysWhatsAppService:
             Dict[str, Any]: Health status
         """
         try:
-            import asyncio
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,

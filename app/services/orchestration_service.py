@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import asyncio
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from app.services.firebase_service import (
@@ -39,7 +40,6 @@ class IntelligentHybridOrchestrator:
         """
         try:
             # Quick test of Gemini availability
-            import asyncio
             test_response = await asyncio.wait_for(
                 ai_orchestrator.generate_response(
                     "test", 
@@ -411,7 +411,14 @@ class IntelligentHybridOrchestrator:
                 if step_key in lead_data:
                     # Answer already stored, but let's validate if we should advance
                     logger.info(f"📝 Answer already exists for step {current_step_id}: {lead_data[step_key][:30]}...")
-                    # Don't re-process, just move to next step
+                    # Check if we should advance to next step
+                    if self._should_advance_step_schema(lead_data[step_key], current_step):
+                        # Move to next step
+                        pass  # Will be handled below
+                    else:
+                        # Re-prompt current step
+                        question = self._interpolate_message(current_step["question"], lead_data)
+                        return question
                 else:
                     # Validate and store the answer
                     normalized_answer = self._validate_and_normalize_answer_schema(message, current_step)
@@ -497,6 +504,9 @@ class IntelligentHybridOrchestrator:
         # Field-specific validation and normalization
         field_type = validation.get("type", "")
         
+        if field_type == "name" or step_id == 1:
+            # Ensure proper name format (capitalize each word)
+            return " ".join(word.capitalize() for word in answer.split())
         elif field_type == "area" or step_id == 2:
             return answer.title()
         elif field_type == "description" or step_id == 3:
@@ -513,11 +523,35 @@ class IntelligentHybridOrchestrator:
         validation = step_config.get("validation", {})
         min_length = validation.get("min_length", 1)
         required = validation.get("required", True)
+        step_id = step_config.get("id", 0)
         
         # Check if required and empty
         if required and (not answer or len(answer) < 1):
             return False
         
+        # Check minimum length requirement
+        if len(answer) < min_length:
+            return False
+        
+        # Step-specific validation
+        if step_id == 1:  # Name validation
+            # Require at least 2 words for full name
+            words = answer.split()
+            return len(words) >= 2 and all(len(word) >= 2 for word in words)
+        elif step_id == 2:  # Area validation
+            # Accept any area with minimum length
+            return len(answer) >= 3
+        elif step_id == 3:  # Situation validation
+            # Require meaningful description
+            return len(answer) >= 5
+        elif step_id == 4:  # Meeting preference validation
+            # Accept yes/no variations
+            answer_lower = answer.lower()
+            valid_responses = ['sim', 'não', 'nao', 'yes', 'no', 'quero', 'gostaria', 'pode ser', 'ok', 'claro']
+            return any(response in answer_lower for response in valid_responses)
+        
+        # Default validation - just check minimum length
+        return len(answer) >= min_length
     async def _handle_phone_collection(
         self, 
         phone_message: str, 
@@ -622,7 +656,6 @@ class IntelligentHybridOrchestrator:
                 logger.info(f"📤 Welcome message sent to user {phone_formatted}")
                 
                 # Wait a moment then send case summary
-                import asyncio
                 await asyncio.sleep(2)
                 
                 # Send case summary to same conversation
