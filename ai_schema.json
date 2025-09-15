@@ -47,6 +47,16 @@
     "sequential": true,
     "steps": [
       {
+        "id": 0,
+        "field": "review_intro",
+        "question": "Só para garantir que registramos corretamente suas informações, vamos revisar desde o início, tudo bem?",
+        "validation": {
+          "required": false,
+          "type": "confirmation"
+        },
+        "error_message": "Pode me confirmar se está tudo certo para revisarmos do começo?"
+      },
+      {
         "id": 1,
         "field": "name",
         "question": "Oi! Que bom que você está em contato conosco. Para te ajudar, preciso do seu nome completo. Pode me informar?",
