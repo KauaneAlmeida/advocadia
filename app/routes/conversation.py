@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.models.request import ConversationRequest
 from app.models.response import ConversationResponse
-from app.services.orchestration_service import intelligent_orchestrator
+from app.services.orchestration_service import clean_orchestrator
 from app.services.firebase_service import get_firebase_service_status
 
 # Logging
@@ -34,8 +34,8 @@ async def start_conversation():
         session_id = str(uuid.uuid4())
         logger.info(f"🚀 Starting new web conversation | session={session_id}")
 
-        # Start with Firebase flow for web platform
-        result = await intelligent_orchestrator.process_message(
+        # Start with clean orchestration for web platform
+        result = await clean_orchestrator.process_message(
             "Olá", 
             session_id, 
             platform="web"
@@ -43,7 +43,7 @@ async def start_conversation():
         
         return ConversationResponse(
             session_id=session_id,
-            response=result.get("response", "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"),
+            response=result.get("response", "Qual é o seu nome completo?"),
             ai_mode=False,
             flow_completed=False,
             phone_collected=False
@@ -75,8 +75,8 @@ async def respond_to_conversation(request: ConversationRequest):
 
         logger.info(f"📝 Processing web response | session={request.session_id} | msg={request.message[:50]}...")
 
-        # Process via Intelligent Orchestrator (web platform)
-        result = await intelligent_orchestrator.process_message(
+        # Process via Clean Orchestrator (web platform)
+        result = await clean_orchestrator.process_message(
             request.message,
             request.session_id,
             platform="web"
@@ -85,10 +85,9 @@ async def respond_to_conversation(request: ConversationRequest):
         return ConversationResponse(
             session_id=request.session_id,
             response=result.get("response", "Como posso ajudá-lo?"),
-            ai_mode=False,
-            flow_completed=result.get("fallback_completed", False),
-            phone_collected=result.get("phone_submitted", False),
-            lead_data=result.get("lead_data", {}),
+            ai_mode=result.get("response_type") == "gemini_conversational",
+            flow_completed=result.get("flow_completed", False),
+            phone_collected=result.get("phone_collected", False),
             message_count=result.get("message_count", 1)
         )
 
@@ -117,7 +116,7 @@ async def submit_phone_number(request: dict):
         
         logger.info(f"📱 Phone submitted | session={session_id} | number={phone_number}")
 
-        result = await intelligent_orchestrator.handle_phone_number_submission(phone_number, session_id)
+        result = await clean_orchestrator.handle_phone_number_submission(phone_number, session_id)
         return result
 
     except Exception as e:
@@ -135,7 +134,7 @@ async def get_conversation_status(session_id: str):
     """
     try:
         logger.info(f"📊 Fetching status | session={session_id}")
-        status_info = await intelligent_orchestrator.get_session_context(session_id)
+        status_info = await clean_orchestrator.get_session_context(session_id)
         return status_info
 
     except Exception as e:
@@ -219,18 +218,22 @@ async def conversation_service_status():
     """
     try:
         # Get comprehensive status from orchestrator
-        service_status = await intelligent_orchestrator.get_overall_service_status()
+        service_status = await clean_orchestrator.get_overall_service_status()
 
         return {
-            "service": "platform_specific_conversation_service",
+            "service": "clean_orchestration_conversation_service",
             "status": service_status["overall_status"],
-            "approach": "platform_separation",
+            "approach": "firebase_primary_gemini_secondary",
             "firebase_status": service_status["firebase_status"],
-            "ai_status": service_status["ai_status"],
+            "gemini_status": service_status["gemini_status"],
             "features": service_status["features"],
-            "platforms": {
-                "web": "Firebase structured flow",
-                "whatsapp": "AI responses only"
+            "orchestration_logic": {
+                "step_1": "Check if message is valid Firebase step response",
+                "step_2": "If not, try Gemini for conversational response", 
+                "step_3": "If Gemini fails, use fallback response",
+                "firebase_role": "Main flow controller (source of truth)",
+                "gemini_role": "Secondary assistant (conversational responses)",
+                "separation": "Firebase state never modified by Gemini"
             },
             "endpoints": {
                 "start": "/api/v1/conversation/start",
@@ -245,11 +248,11 @@ async def conversation_service_status():
     except Exception as e:
         logger.error(f"❌ Error getting service status: {str(e)}")
         return {
-            "service": "platform_specific_conversation_service", 
+            "service": "clean_orchestration_conversation_service", 
             "status": "error", 
-            "approach": "platform_separation",
+            "approach": "firebase_primary_gemini_secondary",
             "firebase_status": {"status": "unknown"},
-            "ai_status": {"status": "unknown"},
+            "gemini_status": {"status": "unknown"},
             "features": {},
             "error": str(e)
         }

@@ -107,8 +107,8 @@ async def health_check():
     """Health check endpoint for monitoring and load balancers."""
     try:
         # Get comprehensive service status from orchestrator
-        from app.services.orchestration_service import intelligent_orchestrator
-        service_status = await intelligent_orchestrator.get_overall_service_status()
+        from app.services.orchestration_service import clean_orchestrator
+        service_status = await clean_orchestrator.get_overall_service_status()
         
         # Check WhatsApp bot status (non-critical)
         try:
@@ -125,16 +125,17 @@ async def health_check():
                 "fastapi": "active",
                 "whatsapp_bot": whatsapp_status.get("status", "unknown"),
                 "firebase": service_status["firebase_status"].get("status", "unknown"),
-                "gemini_ai": service_status["ai_status"].get("status", "not_configured")
+                "gemini_ai": service_status["gemini_status"].get("status", "not_configured")
             },
             "features": [
-                "guided_conversation_flow",
+                "clean_orchestration",
+                "firebase_structured_flow",
+                "gemini_conversational_responses",
                 "whatsapp_integration", 
-                "ai_powered_responses" if service_status.get("gemini_available") else "fallback_responses",
                 "lead_management",
                 "session_persistence"
             ],
-            "fallback_mode": service_status.get("fallback_mode", True),
+            "orchestration_mode": service_status.get("orchestration_mode", "firebase_primary_gemini_secondary"),
             "phone_number": os.getenv("WHATSAPP_PHONE_NUMBER", "not-configured"),
             "uptime": "active",
             "detailed_status": service_status
@@ -155,7 +156,7 @@ async def health_check():
                     "gemini_ai": "unknown"
                 },
                 "features": [],
-                "fallback_mode": True,
+                "orchestration_mode": "error",
                 "error": str(e),
                 "uptime": "active"
             }

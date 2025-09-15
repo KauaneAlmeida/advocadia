@@ -67,9 +67,8 @@ async def generate_gemini_response(user_message: str) -> str:
             "Content-Type": "application/json",
             "X-goog-api-key": api_key
         }
-        
-        # Construct the API endpoint URL
-        url = f"{GEMINI_API_BASE_URL}/models/{GEMINI_MODEL}:generateContent"
+            "Content-Type": "application/json"
+        url = f"{GEMINI_API_BASE_URL}/models/{GEMINI_MODEL}:generateContent?key={api_key}"
         
         logger.info(f"Sending request to Gemini API for message: {user_message[:50]}...")
         

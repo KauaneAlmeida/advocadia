@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, status
 
-from app.services.orchestration_service import intelligent_orchestrator
+from app.services.orchestration_service import clean_orchestrator
 from app.services.baileys_service import (
     send_baileys_message,
     get_baileys_status,
@@ -46,20 +46,20 @@ async def whatsapp_webhook(request: Request):
 
         logger.info(f"🎯 Processing WhatsApp message from {phone_number}: {message_text[:50]}...")
 
-        # Process via Intelligent Orchestrator (WhatsApp platform - AI only)
-        response = await intelligent_orchestrator.process_message(
+        # Process via Clean Orchestrator (WhatsApp platform - Gemini only)
+        response = await clean_orchestrator.process_message(
             message_text,
             session_id,
             phone_number=phone_number,
             platform="whatsapp"
         )
 
-        # The response contains AI-generated reply (no Firebase flow)
+        # The response contains Gemini-generated reply (no Firebase flow for WhatsApp)
         ai_response = response.get("response", "")
         
         if ai_response:
-            logger.info(f"🤖 Sending AI response to {phone_number}")
-            logger.debug(f"AI Response: {ai_response[:100]}...")
+            logger.info(f"🤖 Sending Gemini response to {phone_number}")
+            logger.debug(f"Gemini Response: {ai_response[:100]}...")
             
             # Response is sent by the WhatsApp bot automatically
             # We just return the response data for the bot to handle
@@ -68,11 +68,11 @@ async def whatsapp_webhook(request: Request):
                 "message_id": message_id,
                 "session_id": session_id,
                 "response": ai_response,
-                "response_type": response.get("response_type", "ai_whatsapp"),
+                "response_type": response.get("response_type", "gemini_whatsapp"),
                 "message_count": response.get("message_count", 1)
             }
         else:
-            logger.warning("⚠️ No AI response generated")
+            logger.warning("⚠️ No Gemini response generated")
             return {
                 "status": "success",
                 "message_id": message_id,
