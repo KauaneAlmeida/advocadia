@@ -49,10 +49,10 @@
       {
         "id": 0,
         "field": "review_intro",
-        "question": "Só para garantir que registramos corretamente suas informações, vamos revisar desde o início, tudo bem?",
+        "question": "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?",
         "validation": {
-          "required": true,
-          "type": "confirmation"
+          "type": "confirmation",
+          "required": true
         },
         "error_message": "Pode me confirmar se está tudo certo para revisarmos do começo?"
       },

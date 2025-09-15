@@ -306,6 +306,7 @@ class IntelligentHybridOrchestrator:
                     "enabled": True,
                     "sequential": True,
                     "steps": [
+                        {"id": 0, "field": "review_intro", "question": "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?", "validation": {"type": "confirmation", "required": True}},
                         {
                             "id": step.get("id", idx),
                             "field": f"step_{step.get('id', idx)}",
@@ -369,20 +370,21 @@ class IntelligentHybridOrchestrator:
             
             # Initialize fallback_step if not set - ALWAYS start at step 1
             if session_data.get("fallback_step") is None:
-                session_data["fallback_step"] = 0  # Always start at step 0 (review_intro)
+                session_data["fallback_step"] = 0  # Always start at step 0
                 session_data["lead_data"] = {}  # Initialize lead data
                 session_data["fallback_completed"] = False  # Ensure not completed
                 await save_user_session(session_id, session_data)
-                logger.info(f"🚀 STRICT schema fallback initialized at step 0 for session {session_id}")
+                logger.info(f"🚀 Schema fallback initialized at step 0 for session {session_id}")
                 
                 # Return first question directly
                 first_step = next((s for s in steps if s["id"] == 0), None)
                 if first_step:
                     question = self._interpolate_message(first_step["question"], session_data.get("lead_data", {}))
-                    logger.info(f"📝 Returning step 0 question")
+                    logger.info(f"📝 Returning step 0 question: {question[:50]}...")
                     return question
                 else:
-                    return "Só para garantir que registramos corretamente suas informações, vamos revisar desde o início, tudo bem?"
+                    logger.error(f"❌ Step 0 not found in schema, using fallback question")
+                    return "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"
             
             current_step_id = session_data["fallback_step"]
             lead_data = session_data.get("lead_data", {})
@@ -392,14 +394,19 @@ class IntelligentHybridOrchestrator:
             # Find current step in sorted steps
             current_step = next((s for s in steps if s["id"] == current_step_id), None)
             if not current_step:
-                logger.error(f"❌ Step {current_step_id} not found, resetting to step 0")
+                logger.error(f"❌ Step {current_step_id} not found in schema steps. Available steps: {[s.get('id') for s in steps]}")
                 session_data["fallback_step"] = 0
                 session_data["lead_data"] = {}
                 session_data["fallback_completed"] = False
                 await save_user_session(session_id, session_data)
                 first_step = next((s for s in steps if s["id"] == 0), None)
                 if first_step:
-                    return self._interpolate_message(first_step["question"], {})
+                    question = self._interpolate_message(first_step["question"], {})
+                    logger.info(f"📝 Reset to step 0, returning: {question[:50]}...")
+                    return question
+                else:
+                    logger.error(f"❌ Critical error: Step 0 not found in schema after reset")
+                    return "Olá! Para garantir que registramos corretamente suas informações, vamos começar do início. Tudo bem?"
             
             # Process user's answer if provided and not empty
             step_key = current_step.get("field", f"step_{current_step_id}")
@@ -536,7 +543,7 @@ class IntelligentHybridOrchestrator:
         if step_id == 0:  # Review intro confirmation
             # Accept confirmation variations
             answer_lower = answer.lower()
-            confirmation_responses = ['sim', 'ok', 'tudo bem', 'pode ser', 'claro', 'yes', 'certo', 'vamos', 'confirmo']
+            confirmation_responses = ['sim', 'ok', 'tudo bem', 'pode ser', 'claro', 'yes', 'certo', 'vamos', 'confirmo', 'vamos lá', 'perfeito', 'beleza']
             return any(response in answer_lower for response in confirmation_responses)
         if step_id == 1:  # Name validation
             # Require at least 2 words for full name
