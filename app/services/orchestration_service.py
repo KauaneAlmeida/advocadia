@@ -369,20 +369,20 @@ class IntelligentHybridOrchestrator:
             
             # Initialize fallback_step if not set - ALWAYS start at step 1
             if session_data.get("fallback_step") is None:
-                session_data["fallback_step"] = 1  # Always start at step 1
+                session_data["fallback_step"] = 0  # Always start at step 0 (review_intro)
                 session_data["lead_data"] = {}  # Initialize lead data
                 session_data["fallback_completed"] = False  # Ensure not completed
                 await save_user_session(session_id, session_data)
-                logger.info(f"🚀 STRICT schema fallback initialized at step 1 for session {session_id}")
+                logger.info(f"🚀 STRICT schema fallback initialized at step 0 for session {session_id}")
                 
                 # Return first question directly
-                first_step = next((s for s in steps if s["id"] == 1), None)
+                first_step = next((s for s in steps if s["id"] == 0), None)
                 if first_step:
                     question = self._interpolate_message(first_step["question"], session_data.get("lead_data", {}))
-                    logger.info(f"📝 Returning step 1 question")
+                    logger.info(f"📝 Returning step 0 question")
                     return question
                 else:
-                    return "Qual é o seu nome completo?"
+                    return "Só para garantir que registramos corretamente suas informações, vamos revisar desde o início, tudo bem?"
             
             current_step_id = session_data["fallback_step"]
             lead_data = session_data.get("lead_data", {})
@@ -392,15 +392,14 @@ class IntelligentHybridOrchestrator:
             # Find current step in sorted steps
             current_step = next((s for s in steps if s["id"] == current_step_id), None)
             if not current_step:
-                logger.error(f"❌ Step {current_step_id} not found, resetting to step 1")
-                session_data["fallback_step"] = 1
+                logger.error(f"❌ Step {current_step_id} not found, resetting to step 0")
+                session_data["fallback_step"] = 0
                 session_data["lead_data"] = {}
                 session_data["fallback_completed"] = False
                 await save_user_session(session_id, session_data)
-                first_step = next((s for s in steps if s["id"] == 1), None)
+                first_step = next((s for s in steps if s["id"] == 0), None)
                 if first_step:
                     return self._interpolate_message(first_step["question"], {})
-                return "Qual é o seu nome completo?"
             
             # Process user's answer if provided and not empty
             step_key = current_step.get("field", f"step_{current_step_id}")
@@ -534,6 +533,11 @@ class IntelligentHybridOrchestrator:
             return False
         
         # Step-specific validation
+        if step_id == 0:  # Review intro confirmation
+            # Accept confirmation variations
+            answer_lower = answer.lower()
+            confirmation_responses = ['sim', 'ok', 'tudo bem', 'pode ser', 'claro', 'yes', 'certo', 'vamos', 'confirmo']
+            return any(response in answer_lower for response in confirmation_responses)
         if step_id == 1:  # Name validation
             # Require at least 2 words for full name
             words = answer.split()
@@ -619,7 +623,7 @@ class IntelligentHybridOrchestrator:
                 logger.error(f"❌ Error saving lead: {str(save_error)}")
 
             # Prepare WhatsApp messages
-            user_name = lead_data.get("name", lead_data.get("step_1", "Cliente"))
+            user_name = lead_data.get("name", lead_data.get("step_1", lead_data.get("step_0", "Cliente")))
             area = lead_data.get("area_of_law", lead_data.get("step_2", "não informada"))
             situation_full = lead_data.get("situation", lead_data.get("step_3", "não detalhada"))
             situation = situation_full[:150]
@@ -648,7 +652,7 @@ class IntelligentHybridOrchestrator:
                 welcome_message = welcome_message.replace(f"{{{key}}}", value)
                 summary_message = summary_message.replace(f"{{{key}}}", value)
 
-            # Send WhatsApp messages
+            # Send WhatsApp messages - ALWAYS send both welcome_message and case_summary
             whatsapp_success = False
             try:
                 # Send welcome message to user
@@ -661,6 +665,23 @@ class IntelligentHybridOrchestrator:
                 # Send case summary to same conversation
                 await baileys_service.send_whatsapp_message(whatsapp_number, summary_message)
                 logger.info(f"📤 Case summary sent to user conversation")
+                
+                # Send internal notification to law firm number
+                internal_message = f"""🔔 *Nova Lead Capturada via Fallback*
+
+👤 *Cliente:* {user_name}
+📱 *Telefone:* {phone_clean}
+🆔 *Sessão:* {session_id}
+⏰ *Horário:* {datetime.now(timezone.utc).strftime('%d/%m/%Y às %H:%M')}
+
+📋 *Dados Coletados:*
+• Área Jurídica: {area}
+• Situação: {situation}
+
+_Mensagem enviada automaticamente pelo sistema de fallback._"""
+                
+                await baileys_service.send_whatsapp_message(f"{self.law_firm_number}@s.whatsapp.net", internal_message)
+                logger.info(f"📤 Internal notification sent to law firm")
                 
                 whatsapp_success = True
                 

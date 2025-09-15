@@ -51,7 +51,7 @@
         "field": "review_intro",
         "question": "Só para garantir que registramos corretamente suas informações, vamos revisar desde o início, tudo bem?",
         "validation": {
-          "required": false,
+          "required": true,
           "type": "confirmation"
         },
         "error_message": "Pode me confirmar se está tudo certo para revisarmos do começo?"
