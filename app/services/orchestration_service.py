@@ -453,9 +453,6 @@ class IntelligentHybridOrchestrator:
                 "comercial": "Empresarial",
                 "negócio": "Empresarial",
                 "negocio": "Empresarial"
-            }
-            
-            answer_lower = answer.lower()
             for keyword, normalized in area_map.items():
                 if keyword in answer_lower:
                     return normalized
